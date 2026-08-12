@@ -1,0 +1,30 @@
+# Telegram Bot Token from @BotFather
+telegram_bot_token = "123456789:ABCdefGHIjklMNOpqrsTUVwxyZ"
+
+# Telegram Supergroup Chat ID (typically negative for supergroups, e.g. -1001234567890)
+chat_id = -1001234567890
+
+# Optional: Telegram Forum Topic Thread ID (obtained via /help command in the topic)
+archive_thread_id = 42
+
+# Optional: GitHub Personal Access Token (PAT) - increases rate limit from 60/hr to 5000/hr
+# github_token = "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Poll interval in seconds (default: 900 = 15 minutes)
+poll_interval_secs = 900
+
+# Path to SQLite database file
+db_path = "kostubet.db"
+
+# Pre-populated list of repositories to track
+[[repos]]
+owner = "rust-lang"
+name = "rust"
+
+[[repos]]
+owner = "tokio-rs"
+name = "tokio"
+
+[[repos]]
+owner = "teloxide"
+name = "teloxide"

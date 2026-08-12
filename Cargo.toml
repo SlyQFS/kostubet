@@ -1,0 +1,26 @@
+[package]
+name = "kostubet-github"
+version = "0.1.0"
+edition = "2021"
+authors = ["Kostubet"]
+description = "A Telegram bot watching GitHub repositories and posting release/tag/commit updates to a forum topic."
+
+[dependencies]
+tokio = { version = "1.38", features = ["full"] }
+teloxide = { version = "0.13", features = ["macros"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "sqlite"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"
+html-escape = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

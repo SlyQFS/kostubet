@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  kostubet-github:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kostubet-github
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - kostubet_data:/app/data
+
+volumes:
+  kostubet_data:

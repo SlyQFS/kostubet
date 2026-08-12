@@ -1,0 +1,24 @@
+# Rust build artifacts
+/target/
+
+# SQLite Database files
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+kostubet.db
+
+# Environment variables & secrets
+.env
+*.env
+!*.env.example
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
