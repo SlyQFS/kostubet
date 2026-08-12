@@ -1,111 +1,93 @@
 # Kostubet GitHub Watcher Telegram Bot 🚀
 
-High-performance, lightweight Rust application that monitors GitHub repositories for releases, tags, or commits, and posts beautifully formatted HTML update cards into a specific topic thread within a Telegram supergroup forum.
+Высокопроизводительный легкий бота на Rust, который отслеживает репозитории GitHub (релизы, теги, коммиты) и отправляет оформленные Rich Text карточки в топик супергруппы Telegram.
 
 ---
 
-## ✨ Features
+## ✨ Особенности
 
-- **Zero-Config Env Setup**: Run directly with environment variables (`TRACKED_REPOS="owner/repo1,owner/repo2"`) without editing config files.
-- **Ultra-Lightweight Container**: Multi-stage Alpine build (~20MB total container image size).
-- **Beautiful HTML Cards**: Modern visual card layout with badges (🚀 `[RELEASE]`, 🏷️ `[TAG]`, 📝 `[COMMIT]`), emojis, and Telegram `<blockquote expandable>` for clean changelogs.
-- **Local Dry-Run Mode**: Test fetching and preview output cards directly in your terminal (`--dry-run` or `DRY_RUN=true`) without sending Telegram messages or requiring bot credentials.
-- **Forum Topic Support**: Posts directly into a Telegram supergroup topic thread (`TELEGRAM_ARCHIVE_THREAD_ID`).
-- **ETag Zero-Quota Polling**: Uses conditional `If-None-Match` HTTP requests. Unchanged repos return `304 Not Modified` and consume **zero** rate-limit quota.
-- **SQLite State Persistence**: Saves last seen ID, SHA, and ETag. State updates **only after** confirmed Telegram delivery.
-- **Interactive Commands**: Manage tracked repositories dynamically via Telegram (`/track`, `/untrack`, `/list`, `/help`).
-
----
-
-## 💻 Quick Start & Fast Setup
-
-### 1. Environment-Only Fast Launch (No config files!)
-
-Create a `.env` file from `.env.example`:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env`:
-
-```env
-TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrsTUVwxyZ
-TELEGRAM_CHAT_ID=-1001234567890
-TELEGRAM_ARCHIVE_THREAD_ID=42
-TRACKED_REPOS=rust-lang/rust,tokio-rs/tokio,teloxide/teloxide
-```
-
-Start immediately with Docker Compose:
-
-```bash
-docker compose up -d
-```
+- **Управление в ЛС (без мусора в группе)**: Все команды управления (`/admin`, `/test`, `/track`, `/untrack`, `/list`, `/help`) выполняются **исключительно в ЛС с ботом**.
+- **Ограничение прав**: Команды управления доступны **только Администраторам группы** или пользователям из `ADMIN_USER_IDS`.
+- **Гибкие переключатели**: Возможность включать/отключать проверку Релизов, Тегов и Коммитов (`CHECK_RELEASES`, `CHECK_TAGS`, `CHECK_COMMITS`).
+- **Ультра-легкий контейнер**: Сборка на базе Alpine Linux (~20 МБ размер итогового образа).
+- **Красивые Rich Text карточки**: Поддержка заголовков, жирного шрифта, курсива, блоков кода и Telegram `<blockquote expandable>` с автоотключением внешних баннеров (OG link preview).
+- **Нулевой расход лимитов (ETag Caching)**: Использование HTTP-заголовков `If-None-Match`. Неизменившиеся репозитории возвращают `304 Not Modified` и **не тратят лимит запросов GitHub**.
+- **Надежность SQLite**: Информация об отправленных релизах сохраняется в SQLite `kostubet.db` **только после подтверждения доставки** в Telegram.
 
 ---
 
-## 🧪 Local Dry-Run Testing (Test directly on your PC)
+## 🚀 Запуск в Docker
 
-You can test GitHub fetching and inspect the exact Telegram card layouts in your console without sending any messages or setting up Telegram credentials:
+### Вариант 1. Запуск через Docker Compose (Рекомендуемый)
 
-```bash
-# Using CLI flag
-cargo run -- --dry-run
+1. Создайте файл `.env` из примера:
+   ```bash
+   cp .env.example .env
+   ```
 
-# Or specifying repos via environment variable
-DRY_RUN=true TRACKED_REPOS="rust-lang/rust,tokio-rs/tokio" cargo run
-```
+2. Заполните `.env`:
+   ```env
+   TELEGRAM_BOT_TOKEN=7123456789:ABCdefGHIjklMNOpqrsTUVwxyZ
+   TELEGRAM_CHAT_ID=-1001987654321
+   TELEGRAM_ARCHIVE_THREAD_ID=42
+   ADMIN_USER_IDS=123456789
+   TRACKED_REPOS=tokio-rs/tokio,rust-lang/rust
 
-Sample Dry-Run Terminal Output:
-```
-==========================================================
-🚀 DRY-RUN MODE ACTIVE: Running test poll cycle...
-No messages will be sent to Telegram.
-==========================================================
+   # Переключатели проверок (true / false)
+   CHECK_RELEASES=true
+   CHECK_TAGS=true
+   CHECK_COMMITS=false
 
-╔════════════════════════════════════════════════════════════════════════════╗
-║  [DRY-RUN] UPDATE DETECTED: tokio-rs/tokio (Release)
-╠════════════════════════════════════════════════════════════════════════════╣
-🚀 <b>NEW RELEASE</b> • <b>tokio-rs/tokio</b>
+   POLL_INTERVAL_SECS=900
+   ```
 
-📦 <b>Version:</b> <code>tokio-1.42.0</code>
-📌 <b>Title:</b> tokio-1.42.0
-🔗 <a href="https://github.com/tokio-rs/tokio/releases/tag/tokio-1.42.0"><b>Open Release Notes on GitHub</b></a>
-
-<blockquote expandable>
-This release adds support for...
-</blockquote>
-╚════════════════════════════════════════════════════════════════════════════╝
-```
+3. Запустите одной командой:
+   ```bash
+   docker compose up -d
+   ```
 
 ---
 
-## 🤖 Interactive Telegram Commands
+### Вариант 2. Прямая команда `docker run` (со всеми флагами `-e`)
 
-| Command | Syntax | Description |
-|---|---|---|
-| `/track` | `/track owner/repo` | Adds a new repository to watch list |
-| `/untrack` | `/untrack owner/repo` | Removes a repository from watch list |
-| `/list` | `/list` | Shows all tracked repositories & last seen versions |
-| `/help` | `/help` | Shows help message and topic thread debug ID |
+1. Соберите образ:
+   ```bash
+   docker build -t kostubet-github .
+   ```
+
+2. Запустите контейнер со всеми флагами:
+   ```bash
+   docker run -d \
+     --name kostubet-github \
+     -e TELEGRAM_BOT_TOKEN="7123456789:ABCdefGHIjklMNOpqrsTUVwxyZ" \
+     -e TELEGRAM_CHAT_ID="-1001987654321" \
+     -e TELEGRAM_ARCHIVE_THREAD_ID="42" \
+     -e ADMIN_USER_IDS="123456789" \
+     -e TRACKED_REPOS="tokio-rs/tokio,rust-lang/rust" \
+     -e CHECK_RELEASES="true" \
+     -e CHECK_TAGS="true" \
+     -e CHECK_COMMITS="false" \
+     -e POLL_INTERVAL_SECS="900" \
+     -v $(pwd)/data:/app/data \
+     --restart unless-stopped \
+     kostubet-github
+   ```
 
 ---
 
-## ⚙️ Configuration Reference
+## 🤖 Команды управления в ЛС (Direct Messages)
 
-| Option / Env Var | Config Key | Description |
-|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | `telegram_bot_token` | Bot API token from @BotFather |
-| `TELEGRAM_CHAT_ID` | `chat_id` | Supergroup Chat ID (negative integer) |
-| `TELEGRAM_ARCHIVE_THREAD_ID` | `archive_thread_id` | Target topic thread ID |
-| `GITHUB_TOKEN` | `github_token` | GitHub PAT (increases quota to 5000/hr) |
-| `TRACKED_REPOS` | `repos` | Comma-separated repos (`owner/repo1,owner/repo2`) |
-| `POLL_INTERVAL_SECS` | `poll_interval_secs` | Polling interval in seconds (default: 900) |
-| `DB_PATH` | `db_path` | SQLite database file path |
-| `DRY_RUN` / `--dry-run` | `dry_run` | Enable local dry-run test mode |
+| Команда | Описание |
+|---|---|
+| `/admin` | Открыть панель администратора со статусом и настройками |
+| `/test` | Отправить Rich Text тестовую карточку релиза в топик группы |
+| `/track owner/repo` | Добавить репозиторий в список отслеживания |
+| `/untrack owner/repo` | Удалить репозиторий |
+| `/list` | Показать список отслеживаемых репозиториев и их версии |
+| `/help` | Показать отладочную информацию (User ID, Chat ID, Thread ID) |
 
 ---
 
-## 📄 License
+## 📄 Лицензия
 
 MIT License.
