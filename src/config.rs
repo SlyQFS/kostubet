@@ -264,6 +264,25 @@ impl Config {
         if self.telegram_bot_token.trim().is_empty() {
             anyhow::bail!("telegram_bot_token is missing! Set it in config.toml, .env, or via TELEGRAM_BOT_TOKEN env var.");
         }
+        if self.chat_id == 0 {
+            tracing::warn!(
+                "TELEGRAM_CHAT_ID не задан или равен 0 — публикация карточек в супергруппу ОТКЛЮЧЕНА (поллер и /test не будут работать)."
+            );
+        }
+        if let Some(tid) = self.archive_thread_id {
+            if tid <= 0 {
+                anyhow::bail!(
+                    "TELEGRAM_ARCHIVE_THREAD_ID должен быть положительным числом (ID темы форума), получено: {}",
+                    tid
+                );
+            }
+        }
+        if self.poll_interval_secs < 60 {
+            tracing::warn!(
+                "POLL_INTERVAL_SECS = {} слишком мал — риск исчерпания квоты GitHub API (рекомендуется ≥ 300).",
+                self.poll_interval_secs
+            );
+        }
         Ok(())
     }
 }

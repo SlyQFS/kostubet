@@ -92,6 +92,22 @@ async fn main() -> Result<()> {
         info!("🧪 ТЕСТОВЫЙ РЕЖИМ (DRY-RUN) АКТИВЕН: Карточки отправляются в Telegram, но БД не обновляется.");
     }
 
+    // Announce the effective publication destination so a misconfigured
+    // topic is visible immediately in the logs.
+    match config.chat_id {
+        0 => {}
+        cid => match config.archive_thread_id {
+            Some(tid) => info!(
+                "Публикация карточек: чат {} в топик {} (проверьте, что бот состоит в группе и тема существует)",
+                cid, tid
+            ),
+            None => info!(
+                "Публикация карточек: чат {} без указания топика (TELEGRAM_ARCHIVE_THREAD_ID не задан — карточки пойдут в «Общий»)",
+                cid
+            ),
+        },
+    }
+
     // Initialize database
     let db = Database::new(&config.db_path).await?;
     info!("База данных инициализирована: {}", config.db_path);

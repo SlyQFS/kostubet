@@ -8,7 +8,7 @@ use crate::db::tags::ItemType;
 use crate::db::Database;
 use crate::dialogue::{AdminState, DialogueState};
 use crate::dialogue::BotDialogue;
-use crate::services::render::{build_apk_post_data, render_post_keyboard, render_post_text};
+use crate::services::render::build_apk_post_data;
 use crate::strings::ACCESS_DENIED;
 use anyhow::Result;
 use html_escape::encode_text;
@@ -1046,6 +1046,8 @@ pub async fn handle_apps_page_callback(
 }
 
 /// Public: renders a full app card as a new message (opened from `/apps`).
+/// Uses `send_post`, so the user-uploaded cover photo and the download
+/// keyboard are included, exactly like in the published supergroup card.
 pub async fn handle_appcard_callback(
     bot: &Bot,
     q: &CallbackQuery,
@@ -1099,13 +1101,6 @@ pub async fn handle_appcard_callback(
         &apk_tuples,
     );
 
-    let text = render_post_text(&post);
-    let kb = render_post_keyboard(&post);
-
-    let mut req = bot.send_message(chat_id, text).parse_mode(ParseMode::Html);
-    if let Some(keyboard) = kb {
-        req = req.reply_markup(keyboard);
-    }
-    req.await?;
+    crate::services::render::send_post(bot, chat_id.0, None, &post).await?;
     Ok(())
 }

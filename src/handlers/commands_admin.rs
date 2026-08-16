@@ -725,8 +725,20 @@ pub async fn handle_test(
             .await?;
         }
         Err(e) => {
-            bot.send_message(chat_id, format!("❌ Ошибка отправки карточки: {}", e))
-                .await?;
+            bot.send_message(
+                chat_id,
+                format!(
+                    "❌ Ошибка отправки карточки: {}\n\n\
+                    <b>Проверьте:</b>\n\
+                    • Бот добавлен в супергруппу и имеет право отправки сообщений\n\
+                    • <code>TELEGRAM_CHAT_ID</code> указан верно (например, <code>-1001234567890</code>)\n\
+                    • <code>TELEGRAM_ARCHIVE_THREAD_ID</code> — ID существующей темы (не удалена)\n\
+                    • Тема не закрыта для бота",
+                    e
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
         }
     }
 

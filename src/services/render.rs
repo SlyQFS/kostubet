@@ -517,83 +517,108 @@ pub async fn send_post(
     let text = render_post_text(post);
     let kb = render_post_keyboard(post);
 
+    // Photo card attempt. A failed photo send (e.g. a stale cover file_id
+    // after a bot token change, or an unreadable remote URL) must NOT kill
+    // the whole publication: log it and fall back to the text-only card.
     if let Some(ref cover) = post.cover_image {
-        let input_file = if cover.starts_with("http://") || cover.starts_with("https://") {
-            InputFile::url(reqwest::Url::parse(cover)?)
-        } else {
-            InputFile::file_id(cover.clone())
+        let photo_result = match build_cover_input_file(cover) {
+            Some(input_file) => {
+                send_photo_card(bot, chat_id, thread_id, &input_file, &text, &post.title, kb.as_ref())
+                    .await
+            }
+            None => Err(anyhow::anyhow!("invalid cover reference")),
         };
 
-        // Telegram photo caption character limit is 1024 characters
-        if text.chars().count() <= 1024 {
-            let bot_clone = bot.clone();
-            let input_file_clone = input_file.clone();
-            let text_clone = text.clone();
-            let kb_clone = kb.clone();
-
-            let msg = execute_telegram_with_retry(|| {
-                let mut req = bot_clone
-                    .send_photo(ChatId(chat_id), input_file_clone.clone())
-                    .caption(text_clone.clone())
-                    .parse_mode(ParseMode::Html);
-
-                if let Some(tid) = thread_id {
-                    req = req.message_thread_id(ThreadId(MessageId(tid as i32)));
-                }
-                if let Some(ref keyboard) = kb_clone {
-                    req = req.reply_markup(keyboard.clone());
-                }
-                req.send()
-            })
-            .await?;
-
+        if let Ok(msg) = photo_result {
             return Ok(msg);
-        } else {
-            // Caption > 1024: Send photo with short header, then separate text message with full details + keyboard
-            let short_caption = format!("🆕 <b>{}</b>", encode_text(&post.title));
-            let bot_clone = bot.clone();
-            let input_file_clone = input_file.clone();
-
-            let _photo_msg = execute_telegram_with_retry(|| {
-                let mut photo_req = bot_clone
-                    .send_photo(ChatId(chat_id), input_file_clone.clone())
-                    .caption(short_caption.clone())
-                    .parse_mode(ParseMode::Html);
-
-                if let Some(tid) = thread_id {
-                    photo_req = photo_req.message_thread_id(ThreadId(MessageId(tid as i32)));
-                }
-                photo_req.send()
-            })
-            .await?;
-
-            let bot_clone2 = bot.clone();
-            let text_clone = text.clone();
-            let kb_clone = kb.clone();
-
-            let msg = execute_telegram_with_retry(|| {
-                let mut msg_req = bot_clone2
-                    .send_message(ChatId(chat_id), text_clone.clone())
-                    .parse_mode(ParseMode::Html)
-                    .link_preview_options(disabled_link_preview());
-
-                if let Some(tid) = thread_id {
-                    msg_req = msg_req.message_thread_id(ThreadId(MessageId(tid as i32)));
-                }
-                if let Some(ref keyboard) = kb_clone {
-                    msg_req = msg_req.reply_markup(keyboard.clone());
-                }
-                msg_req.send()
-            })
-            .await?;
-
-            return Ok(msg);
+        } else if let Err(e) = photo_result {
+            tracing::warn!(
+                "Photo card send failed ({}); falling back to text-only card",
+                e
+            );
         }
     }
 
+    send_text_card(bot, chat_id, thread_id, &text, kb).await
+}
+
+/// Builds a Telegram input file from a cover reference (URL or bot file_id).
+fn build_cover_input_file(cover: &str) -> Option<InputFile> {
+    if cover.starts_with("http://") || cover.starts_with("https://") {
+        reqwest::Url::parse(cover).ok().map(InputFile::url)
+    } else {
+        Some(InputFile::file_id(cover.to_string()))
+    }
+}
+
+/// Sends a photo card: photo+caption when the caption fits 1024 chars,
+/// otherwise photo with a short header followed by a full text message.
+async fn send_photo_card(
+    bot: &Bot,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    input_file: &InputFile,
+    text: &str,
+    title: &str,
+    kb: Option<&InlineKeyboardMarkup>,
+) -> anyhow::Result<Message> {
+    if text.chars().count() <= 1024 {
+        let bot_clone = bot.clone();
+        let input_file_clone = input_file.clone();
+        let text_clone = text.to_string();
+        let kb_clone = kb.cloned();
+
+        let msg = execute_telegram_with_retry(|| {
+            let mut req = bot_clone
+                .send_photo(ChatId(chat_id), input_file_clone.clone())
+                .caption(text_clone.clone())
+                .parse_mode(ParseMode::Html);
+
+            if let Some(tid) = thread_id {
+                req = req.message_thread_id(ThreadId(MessageId(tid as i32)));
+            }
+            if let Some(ref keyboard) = kb_clone {
+                req = req.reply_markup(keyboard.clone());
+            }
+            req.send()
+        })
+        .await?;
+
+        return Ok(msg);
+    }
+
+    // Caption > 1024: send the photo with a short header, then a separate
+    // text message with the full card and the keyboard.
+    let short_caption = format!("🆕 <b>{}</b>", encode_text(title));
     let bot_clone = bot.clone();
-    let text_clone = text.clone();
-    let kb_clone = kb.clone();
+    let input_file_clone = input_file.clone();
+
+    let _photo_msg = execute_telegram_with_retry(|| {
+        let mut photo_req = bot_clone
+            .send_photo(ChatId(chat_id), input_file_clone.clone())
+            .caption(short_caption.clone())
+            .parse_mode(ParseMode::Html);
+
+        if let Some(tid) = thread_id {
+            photo_req = photo_req.message_thread_id(ThreadId(MessageId(tid as i32)));
+        }
+        photo_req.send()
+    })
+    .await?;
+
+    send_text_card(bot, chat_id, thread_id, text, kb.cloned()).await
+}
+
+/// Sends the text card (with the download keyboard attached).
+async fn send_text_card(
+    bot: &Bot,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    text: &str,
+    kb: Option<InlineKeyboardMarkup>,
+) -> anyhow::Result<Message> {
+    let bot_clone = bot.clone();
+    let text_clone = text.to_string();
 
     let msg = execute_telegram_with_retry(|| {
         let mut req = bot_clone
@@ -604,7 +629,7 @@ pub async fn send_post(
         if let Some(tid) = thread_id {
             req = req.message_thread_id(ThreadId(MessageId(tid as i32)));
         }
-        if let Some(ref keyboard) = kb_clone {
+        if let Some(ref keyboard) = kb {
             req = req.reply_markup(keyboard.clone());
         }
         req.send()
@@ -796,5 +821,12 @@ mod tests {
         assert!(!rendered.contains("screenshot"), "image alt must be gone: {}", rendered);
         assert!(rendered.contains("See"));
         assert!(rendered.contains("changes"));
+    }
+
+    #[test]
+    fn test_cover_input_file() {
+        assert!(build_cover_input_file("https://example.com/pic.jpg").is_some());
+        assert!(build_cover_input_file("AgACAgIAAxkDAgMG").is_some()); // bot file_id
+        assert!(build_cover_input_file("http://[invalid").is_none()); // malformed URL
     }
 }

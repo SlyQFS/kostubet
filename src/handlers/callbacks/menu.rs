@@ -117,6 +117,13 @@ pub async fn handle_apk_get(
 
     let doc = InputFile::file_id(file_rec.file_id);
     let mut send_req = bot.send_document(msg.chat().id, doc);
+
+    // Deliver the APK into the same forum topic where the download button
+    // lives (in private chats thread_id is None and this is a no-op).
+    if let Some(tid) = msg.regular_message().and_then(|m| m.thread_id) {
+        send_req = send_req.message_thread_id(tid);
+    }
+
     if let Some(name) = file_rec.file_name {
         send_req = send_req
             .caption(format!(

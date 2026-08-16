@@ -314,7 +314,7 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "📦 Отправьте один или несколько <b>.apk файлов</b> документом (до 20 МБ — ограничение Telegram Bot API).\n\
+                "📦 Отправьте один или несколько <b>.apk файлов</b> документом (до 2 ГБ — ограничение Telegram на документы).\n\
                 Когда закончите загрузку всех файлов, отправьте команду <code>/done</code>:",
             )
             .parse_mode(ParseMode::Html)
@@ -359,16 +359,19 @@ pub async fn handle_submit_message(
                     return Ok(());
                 }
 
-                // Telegram Bot API 20 MB payload limit check
-                if doc.file.size > 20 * 1024 * 1024 {
-                    let size_mb = (doc.file.size as f64) / (1024.0 * 1024.0);
+                // Telegram document upload limit (2 GB). The bot never re-uploads
+                // the APK itself — it stores the file_id and resends by it, which
+                // has no size limit, so only the user-side upload limit applies.
+                const MAX_APK_SIZE: u32 = 2 * 1024 * 1024 * 1024; // 2 GB
+                if doc.file.size > MAX_APK_SIZE {
+                    let size_gb = (doc.file.size as f64) / (1024.0 * 1024.0 * 1024.0);
                     bot.send_message(
                         chat_id,
                         format!(
-                            "⚠️ <b>Размер файла превышает лимит 20 МБ ({:.1} МБ)!</b>\n\n\
-                            Telegram Bot API не поддерживает загрузку файлов более 20 МБ напрямую в бот.\n\
-                            Пожалуйста, оптимизируйте размер APK или загрузите версию до 20 МБ.",
-                            size_mb
+                            "⚠️ <b>Размер файла превышает лимит 2 ГБ ({:.2} ГБ)!</b>\n\n\
+                            Telegram не позволяет отправлять документы больше 2 ГБ.\n\
+                            Пожалуйста, оптимизируйте размер APK или загрузите файл вручную.",
+                            size_gb
                         ),
                     )
                     .parse_mode(ParseMode::Html)
@@ -439,7 +442,7 @@ pub async fn handle_submit_message(
             } else {
                 bot.send_message(
                     chat_id,
-                    "⚠️ Отправьте <b>.apk файл</b> как документ (до 20 МБ) или команду <code>/done</code>, когда все файлы загружены.",
+                    "⚠️ Отправьте <b>.apk файл</b> как документ (до 2 ГБ) или команду <code>/done</code>, когда все файлы загружены.",
                 )
                 .parse_mode(ParseMode::Html)
                 .await?;
