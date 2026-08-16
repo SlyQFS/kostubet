@@ -161,6 +161,7 @@ pub async fn handle_suggest(
     let data = SuggestData {
         owner: repo.owner,
         name: repo.name,
+        description: None,
         tags,
     };
 

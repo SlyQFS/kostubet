@@ -88,7 +88,10 @@ pub fn suggest_confirm_keyboard() -> InlineKeyboardMarkup {
             InlineKeyboardButton::callback("✅ Предложить", "sugg_send"),
             InlineKeyboardButton::callback("🏷 Теги", "sugg_tags"),
         ],
-        vec![InlineKeyboardButton::callback("❌ Отмена", "sugg_cancel")],
+        vec![
+            InlineKeyboardButton::callback("📝 Описание", "sugg_desc"),
+            InlineKeyboardButton::callback("❌ Отмена", "sugg_cancel"),
+        ],
     ])
 }
 
@@ -106,6 +109,10 @@ pub async fn send_suggest_confirm(
             .collect::<Vec<_>>()
             .join(" ")
     };
+    let desc_str = match data.description.as_deref().map(str::trim) {
+        Some(d) if !d.is_empty() => encode_text(d).into_owned(),
+        _ => "не задано".to_string(),
+    };
 
     bot.send_message(
         chat_id,
@@ -113,12 +120,14 @@ pub async fn send_suggest_confirm(
             "💡 <b>Предложить репозиторий</b>\n\n\
             📦 <code>{}/{}</code>\n\
             🔗 https://github.com/{}/{}\n\
+            📝 Описание: <i>{}</i>\n\
             🏷 Теги: <code>{}</code>\n\n\
             Отправить заявку на рассмотрение администраторам?",
             encode_text(&data.owner),
             encode_text(&data.name),
             encode_text(&data.owner),
             encode_text(&data.name),
+            desc_str,
             encode_text(&tags_str),
         ),
     )
@@ -168,6 +177,7 @@ pub async fn handle_suggest_message(
             let data = SuggestData {
                 owner: repo.owner,
                 name: repo.name,
+                description: None,
                 tags: Vec::new(),
             };
 
@@ -183,10 +193,35 @@ pub async fn handle_suggest_message(
         SuggestState::Confirm { .. } => {
             bot.send_message(
                 chat_id,
-                "ℹ️ Подтвердите отправку кнопкой <b>✅ Предложить</b>, добавьте теги или отмените предложение.",
+                "ℹ️ Подтвердите отправку кнопкой <b>✅ Предложить</b>, добавьте теги или описание, либо отмените предложение.",
             )
             .parse_mode(ParseMode::Html)
             .await?;
+            Ok(())
+        }
+        SuggestState::WaitingDescription { mut data } => {
+            if text != "/skip" && !text.is_empty() {
+                if let Err(err) = crate::dialogue::validate_description(&text) {
+                    bot.send_message(
+                        chat_id,
+                        format!("{}\n\nПовторите ввод или отправьте <code>/skip</code>.", err),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                    return Ok(());
+                }
+                data.description = Some(text.clone());
+            } else {
+                data.description = None;
+            }
+
+            dialogue
+                .update(DialogueState::Suggest(SuggestState::Confirm {
+                    data: data.clone(),
+                }))
+                .await?;
+
+            send_suggest_confirm(&bot, chat_id, &data).await?;
             Ok(())
         }
         SuggestState::WaitingTags { mut data } => {

@@ -4,7 +4,7 @@
 //! - `suggestions`: Suggestion approvals and rejections.
 //! - `apk_moderation`: Custom APK approvals, rejections, and metadata editing.
 //! - `submit_flow`: User APK wizard state transitions.
-//! - `menu`: Inline navigation shortcuts, onboarding quick actions, and direct APK download dispatch.
+//! - `menu`: Inline navigation shortcuts and onboarding quick actions.
 //! - `panel`: Admin panel (`adm:*`) and public paginated catalog (`pub:apps:*`).
 
 pub mod apk_moderation;
@@ -19,7 +19,7 @@ use crate::dialogue::BotDialogue;
 use crate::strings::ACCESS_DENIED;
 use anyhow::Result;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardMarkup, ParseMode};
+use teloxide::types::{ChatId, InlineKeyboardMarkup, InputFile, ParseMode};
 use tracing::{info, warn};
 
 /// Verifies that the querying user has administrator privileges, replying with a localized alert if not.
@@ -39,15 +39,31 @@ pub async fn require_admin(
     Ok(false)
 }
 
-/// Broadcasts an administrative notification with optional action keyboard to all registered bot admins.
+/// Broadcasts an administrative notification with optional action keyboard to
+/// all registered bot admins. When `photo_file_id` is set, each admin first
+/// receives the image as a preview (e.g. an APK card cover); a failed photo
+/// send is logged and does not block the text notification.
 pub async fn notify_admins(
     bot: &Bot,
     db: &Database,
     text: String,
     keyboard: Option<InlineKeyboardMarkup>,
+    photo_file_id: Option<&str>,
 ) -> Result<()> {
     let admins = db.admins().list_admins().await.unwrap_or_default();
     for admin in admins {
+        if let Some(file_id) = photo_file_id {
+            let photo = bot
+                .send_photo(ChatId(admin.telegram_id), InputFile::file_id(file_id.to_string()))
+                .caption("🖼 Предпросмотр обложки из заявки");
+            if let Err(e) = photo.await {
+                warn!(
+                    "Failed to send cover preview to admin {}: {:?}",
+                    admin.telegram_id, e
+                );
+            }
+        }
+
         let mut req = bot
             .send_message(ChatId(admin.telegram_id), text.clone())
             .parse_mode(ParseMode::Html);
@@ -85,10 +101,7 @@ pub async fn handle_callback(
     };
 
     // Acknowledge callback immediately to remove loading spinner in Telegram client.
-    // `apk_get` acks itself so it can surface error alerts.
-    if !data.starts_with("apk_get:") {
-        let _ = bot.answer_callback_query(q.id.clone()).await;
-    }
+    let _ = bot.answer_callback_query(q.id.clone()).await;
 
     // 1. Repo Suggestion Moderation
     if let Some(id_str) = data.strip_prefix("suggest_approve:") {
@@ -247,20 +260,13 @@ pub async fn handle_callback(
         return panel::handle_appcard_callback(&bot, &q, slug, &db).await;
     }
 
-    // 5. Menu / Start / APK Download Actions
+    // 5. Menu / Start Actions
     if let Some(action) = data.strip_prefix("menu:") {
         return menu::handle_menu_action(&bot, &q, action, &db, user_id).await;
     }
 
     if let Some(action) = data.strip_prefix("start:") {
         return menu::handle_start_action(&bot, &q, action, &dialogue, &db, user_id).await;
-    }
-
-    if let Some(file_row_str) = data.strip_prefix("apk_get:") {
-        let Ok(file_row_id) = file_row_str.parse::<i64>() else {
-            return Ok(());
-        };
-        return menu::handle_apk_get(&bot, &q, file_row_id, &db).await;
     }
 
     info!("Unhandled callback query data: {}", data);

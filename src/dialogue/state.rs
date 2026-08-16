@@ -19,6 +19,9 @@ pub struct SubmitApkData {
     pub app_id: Option<i64>,
     pub slug: String,
     pub name: String,
+    /// App-level description (what the app is). New submissions only.
+    #[serde(default)]
+    pub description: Option<String>,
     pub version: String,
     pub title: Option<String>,
     pub changelog: Option<String>,
@@ -33,6 +36,9 @@ pub enum SubmitApkState {
     ChoosingMode,
     ChoosingExistingApp,
     WaitingName,
+    WaitingDescription {
+        data: Box<SubmitApkData>,
+    },
     WaitingVersion {
         data: Box<SubmitApkData>,
     },
@@ -68,6 +74,9 @@ pub struct EditApkData {
     pub version_id: i64,
     pub app_name: String,
     pub version: String,
+    /// App-level description loaded from the app; saved via `set_app_description`.
+    #[serde(default)]
+    pub description: Option<String>,
     pub title: Option<String>,
     pub changelog: Option<String>,
     pub diff_url: Option<String>,
@@ -78,6 +87,7 @@ pub struct EditApkData {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EditApkState {
     EditingTitle { data: Box<EditApkData> },
+    EditingDescription { data: Box<EditApkData> },
     EditingChangelog { data: Box<EditApkData> },
     EditingDiffUrl { data: Box<EditApkData> },
     EditingTags { data: Box<EditApkData> },
@@ -92,12 +102,26 @@ pub enum AdminState {
     /// Parsed repo: choosing whether to post the current release immediately
     /// or track silently (buttons `adm:trackmode:*`).
     RepoMode { owner: String, name: String },
+    /// Waiting for an optional repo description (or `/skip`).
+    RepoDesc {
+        owner: String,
+        name: String,
+        silent: bool,
+    },
     /// Waiting for space-separated tags for the parsed repo (or `/done`).
     RepoTags {
         owner: String,
         name: String,
         silent: bool,
+        #[serde(default)]
+        description: Option<String>,
     },
+    /// Waiting for a new description for an existing tracked repo
+    /// (text sets it, `/skip` keeps it, `/clear` removes it).
+    RepoDescription { tool_id: i64 },
+    /// Waiting for a new app-level description of a custom app
+    /// (text sets it, `/skip` keeps it, `/clear` removes it).
+    AppDescription { app_id: i64 },
     /// Waiting for a new global tag name.
     NewTag,
     /// Waiting for a tag name that is also attached to an item ("tool"/"custom_app").
@@ -113,6 +137,9 @@ pub enum AdminState {
 pub struct SuggestData {
     pub owner: String,
     pub name: String,
+    /// Optional description proposed by the author (or `/skip`).
+    #[serde(default)]
+    pub description: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -120,8 +147,10 @@ pub struct SuggestData {
 pub enum SuggestState {
     /// Waiting for the user to send a GitHub link or `owner/repo`.
     WaitingLink,
-    /// Confirmation card with [✅ Отправить] [🏷 Теги] [❌ Отмена].
+    /// Confirmation card with [✅ Отправить] [🏷 Теги] [📝 Описание] [❌ Отмена].
     Confirm { data: Box<SuggestData> },
+    /// Waiting for the description text (or `/skip`).
+    WaitingDescription { data: Box<SuggestData> },
     /// Waiting for space-separated tags (or `/skip`).
     WaitingTags { data: Box<SuggestData> },
 }

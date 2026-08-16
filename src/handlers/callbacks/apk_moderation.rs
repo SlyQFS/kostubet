@@ -4,7 +4,7 @@ use crate::db::tags::ItemType;
 use crate::db::Database;
 use crate::dialogue::state::{DialogueState, EditApkData, EditApkState};
 use crate::dialogue::BotDialogue;
-use crate::services::render::{build_apk_post_data, send_post};
+use crate::services::render::{build_apk_post_data, send_apk_documents, send_post};
 use anyhow::Result;
 use html_escape::encode_text;
 use teloxide::prelude::*;
@@ -53,10 +53,6 @@ pub async fn handle_apk_approve(
 
     // Build the publication post
     let apk_files = db.custom_apps().get_apk_files(ver_id).await?;
-    let apk_tuples: Vec<(i64, String)> = apk_files
-        .into_iter()
-        .map(|f| (f.id, f.variant_label))
-        .collect();
 
     let tags = db
         .tags()
@@ -70,11 +66,11 @@ pub async fn handle_apk_approve(
     let post = build_apk_post_data(
         &app.name,
         &ver.version,
+        app.description.clone(),
         ver.changelog.clone(),
         ver.diff_url.clone(),
         ver.cover_image_file_id.clone(),
         tags,
-        &apk_tuples,
     );
 
     // Publish; on failure roll the version back to `pending` so it returns
@@ -124,6 +120,19 @@ pub async fn handle_apk_approve(
         app.name, ver.version, target_chat_id
     );
 
+    // Deliver the APK files as documents right after the card. A delivery
+    // failure must not roll the version back (the card is already published);
+    // surface it to the admin instead.
+    let delivery_errors =
+        send_apk_documents(bot, target_chat_id, target_thread_id, &apk_files, &app.name, &ver.version)
+            .await;
+    if !delivery_errors.is_empty() {
+        warn!(
+            "Failed to deliver some APK files for version {}: {:?}",
+            ver_id, delivery_errors
+        );
+    }
+
     let _ = db
         .audit()
         .log_action(
@@ -150,16 +159,25 @@ pub async fn handle_apk_approve(
     }
 
     if let Some(msg) = &q.message {
+        let delivery_note = if delivery_errors.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\n⚠️ Не удалось доставить некоторые APK-файлы: {}. Файлы можно отправить повторно из каталога /apps.",
+                delivery_errors.join("; ")
+            )
+        };
         let _ = bot
             .edit_message_text(
                 msg.chat().id,
                 msg.id(),
                 format!(
-                    "✅ Заявка на APK #{} (<b>{} v{}</b>) одобрена администратором {} и опубликована!",
+                    "✅ Заявка на APK #{} (<b>{} v{}</b>) одобрена администратором {} и опубликована!{}",
                     ver_id,
                     encode_text(&app.name),
                     encode_text(&ver.version),
-                    admin_name
+                    admin_name,
+                    delivery_note
                 ),
             )
             .parse_mode(ParseMode::Html)
@@ -290,6 +308,7 @@ pub async fn handle_apk_edit_start(
         version_id: ver.id,
         app_name: app.name,
         version: ver.version,
+        description: app.description,
         title: ver.title,
         changelog: ver.changelog,
         diff_url: ver.diff_url,
@@ -381,25 +400,25 @@ pub async fn handle_apk_edit_publish(
             )
             .await?;
 
+        db.custom_apps()
+            .set_app_description(app.id, data.description.as_deref())
+            .await?;
+
         db.tags()
             .set_tags_for_item(ItemType::CustomApp, app.id, &data.tags)
             .await?;
 
         // Publish post
         let apk_files = db.custom_apps().get_apk_files(ver_id).await?;
-        let apk_tuples: Vec<(i64, String)> = apk_files
-            .into_iter()
-            .map(|f| (f.id, f.variant_label))
-            .collect();
 
         let post = build_apk_post_data(
             &app.name,
             &ver.version,
+            data.description.clone(),
             data.changelog.clone(),
             data.diff_url.clone(),
             data.cover_image_file_id.clone(),
             data.tags.clone(),
-            &apk_tuples,
         );
 
         if target_chat_id == 0 {
@@ -451,6 +470,23 @@ pub async fn handle_apk_edit_publish(
             .set_published_message_id(ver_id, published_msg.id.0 as i64)
             .await;
 
+        // Deliver the APK files as documents right after the card.
+        let delivery_errors = send_apk_documents(
+            bot,
+            target_chat_id,
+            target_thread_id,
+            &apk_files,
+            &app.name,
+            &ver.version,
+        )
+        .await;
+        if !delivery_errors.is_empty() {
+            warn!(
+                "Failed to deliver some APK files for version {}: {:?}",
+                ver_id, delivery_errors
+            );
+        }
+
         let _ = db
             .audit()
             .log_action(
@@ -463,15 +499,24 @@ pub async fn handle_apk_edit_publish(
         dialogue.exit().await?;
 
         if let Some(msg) = &q.message {
+            let delivery_note = if delivery_errors.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "\n\n⚠️ Не удалось доставить некоторые APK-файлы: {}. Файлы можно отправить повторно из каталога /apps.",
+                    delivery_errors.join("; ")
+                )
+            };
             let _ = bot
                 .edit_message_text(
                     msg.chat().id,
                     msg.id(),
                     format!(
-                        "🎉 Отредактированная версия #{} (<b>{} v{}</b>) успешно опубликована!",
+                        "🎉 Отредактированная версия #{} (<b>{} v{}</b>) успешно опубликована!{}",
                         ver_id,
                         encode_text(&app.name),
-                        encode_text(&ver.version)
+                        encode_text(&ver.version),
+                        delivery_note
                     ),
                 )
                 .parse_mode(ParseMode::Html)

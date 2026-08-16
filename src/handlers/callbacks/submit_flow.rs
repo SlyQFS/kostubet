@@ -91,6 +91,8 @@ pub async fn handle_submit_app_select(
             app_id: Some(app.id),
             slug: app.slug,
             name: app.name,
+            // App description is kept on the app; loaded for the card preview only.
+            description: app.description.clone(),
             version: String::new(),
             title: None,
             changelog: None,
@@ -171,16 +173,18 @@ pub async fn handle_submit_confirm_send(
             .map(|m| m.chat().id)
             .unwrap_or(ChatId(user_id));
 
-        // Save app
+        // Save app. `get_or_create_app` stores the description only when the
+        // app is actually created; for an existing app it is left untouched
+        // (admins can edit it later from the panel).
         let app = if data.is_new_app {
             db.custom_apps()
-                .get_or_create_app(&data.slug, &data.name, user_id)
+                .get_or_create_app(&data.slug, &data.name, data.description.as_deref(), user_id)
                 .await?
         } else if let Some(app_id) = data.app_id {
             db.custom_apps().get_app_by_id(app_id).await?.unwrap()
         } else {
             db.custom_apps()
-                .get_or_create_app(&data.slug, &data.name, user_id)
+                .get_or_create_app(&data.slug, &data.name, data.description.as_deref(), user_id)
                 .await?
         };
 
@@ -266,9 +270,14 @@ pub async fn handle_submit_confirm_send(
             None => format!("<code>{}</code>", user_id),
         };
 
+        let desc_note = match data.description.as_deref().map(str::trim) {
+            Some(d) if !d.is_empty() => format!("\n📝 Описание: <i>{}</i>", encode_text(d)),
+            _ => String::new(),
+        };
+
         let admin_notice = format!(
             "📱 <b>Новая заявка на публикацию APK #{}</b>{}\n\
-            📦 Приложение: <b>{}</b> (<code>{}</code>)\n\
+            📦 Приложение: <b>{}</b> (<code>{}</code>){}\n\
             🔖 Версия: <code>{}</code>\n\
             📌 Заголовок: <code>{}</code>\n\
             📝 Changelog: <code>{}</code>\n\
@@ -279,6 +288,7 @@ pub async fn handle_submit_confirm_send(
             warning_note,
             encode_text(&data.name),
             encode_text(&data.slug),
+            desc_note,
             encode_text(&data.version),
             encode_text(data.title.as_deref().unwrap_or("нет")),
             encode_text(data.changelog.as_deref().unwrap_or("нет")),
@@ -287,7 +297,14 @@ pub async fn handle_submit_confirm_send(
             data.apk_files.len()
         );
 
-        super::notify_admins(bot, db, admin_notice, Some(kb)).await?;
+        super::notify_admins(
+            bot,
+            db,
+            admin_notice,
+            Some(kb),
+            data.cover_image_file_id.as_deref(),
+        )
+        .await?;
     }
     Ok(())
 }

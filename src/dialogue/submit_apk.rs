@@ -194,6 +194,7 @@ pub async fn handle_submit_message(
                 app_id: None,
                 slug,
                 name,
+                description: None,
                 version: String::new(),
                 title: None,
                 changelog: None,
@@ -202,6 +203,34 @@ pub async fn handle_submit_message(
                 apk_files: Vec::new(),
                 tags: Vec::new(),
             });
+
+            dialogue
+                .update(DialogueState::SubmitApk(SubmitApkState::WaitingDescription {
+                    data,
+                }))
+                .await?;
+
+            bot.send_message(
+                chat_id,
+                "📝 Введите описание приложения (что это за приложение — оно будет показываться в его карточках)\n\
+                или отправьте <code>/skip</code>:",
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        SubmitApkState::WaitingDescription { mut data } => {
+            if text != "/skip" && !text.is_empty() {
+                if let Err(err) = crate::dialogue::validate_description(text) {
+                    bot.send_message(
+                        chat_id,
+                        format!("{}\n\nПовторите ввод или отправьте <code>/skip</code>.", err),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                    return Ok(());
+                }
+                data.description = Some(text.to_string());
+            }
 
             dialogue
                 .update(DialogueState::SubmitApk(SubmitApkState::WaitingVersion {
@@ -468,12 +497,11 @@ pub async fn handle_submit_message(
 
             let post = PostData {
                 title: format!("{} v{}", data.name, data.version),
+                description: data.description.clone(),
                 body: data.changelog.clone(),
                 diff_url: data.diff_url.clone(),
                 tags: data.tags.clone(),
                 cover_image: data.cover_image_file_id.clone(),
-                // No download buttons in the preview: real apk_get buttons are
-                // attached to the published card after moderation.
                 download_buttons: Vec::new(),
             };
 
@@ -490,7 +518,7 @@ pub async fn handle_submit_message(
             bot.send_message(
                 chat_id,
                 format!(
-                    "👀 <b>Предпросмотр карточки релиза:</b>\n\n{}\n\n<i>ℹ️ Кнопки скачивания APK появятся в опубликованной карточке.</i>\n\n━━━━━━━━━━━━━━━\nВсё верно?",
+                    "👀 <b>Предпросмотр карточки релиза:</b>\n\n{}\n\n<i>ℹ️ При публикации APK-файлы будут отправлены в чат сразу после карточки.</i>\n\n━━━━━━━━━━━━━━━\nВсё верно?",
                     preview_text
                 ),
             )

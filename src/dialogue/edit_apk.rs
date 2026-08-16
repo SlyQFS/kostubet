@@ -12,13 +12,13 @@ use html_escape::encode_text;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
-#[tracing::instrument(skip(bot, dialogue, db))]
+#[tracing::instrument(skip(bot, dialogue, _db))]
 pub async fn handle_edit_message(
     bot: Bot,
     msg: Message,
     dialogue: BotDialogue,
     state: EditApkState,
-    db: Database,
+    _db: Database,
 ) -> Result<()> {
     let chat_id = msg.chat.id;
     let text = msg.text().unwrap_or("").trim();
@@ -34,6 +34,44 @@ pub async fn handle_edit_message(
         EditApkState::EditingTitle { mut data } => {
             if text != "/skip" && !text.is_empty() {
                 data.title = Some(text.to_string());
+            }
+
+            let cur_desc = data
+                .description
+                .clone()
+                .unwrap_or_else(|| "не задано".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingDescription {
+                    data,
+                }))
+                .await?;
+
+            bot.send_message(
+                chat_id,
+                format!(
+                    "📝 <b>Текущее описание приложения:</b>\n<i>{}</i>\n\n\
+                    Введите новое описание (что это за приложение) или отправьте:\n\
+                    <code>/skip</code> — оставить как есть, <code>/clear</code> — удалить:",
+                    encode_text(&cur_desc)
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        EditApkState::EditingDescription { mut data } => {
+            if text == "/clear" {
+                data.description = None;
+            } else if text != "/skip" && !text.is_empty() {
+                if let Err(err) = crate::dialogue::validate_description(text) {
+                    bot.send_message(
+                        chat_id,
+                        format!("{}\n\nПовторите ввод, <code>/skip</code> или <code>/clear</code>.", err),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                    return Ok(());
+                }
+                data.description = Some(text.to_string());
             }
 
             let cur_changelog = data
@@ -116,20 +154,14 @@ pub async fn handle_edit_message(
                 data.tags = tags;
             }
 
-            let apk_files = db.custom_apps().get_apk_files(data.version_id).await?;
-            let apk_tuples: Vec<(i64, String)> = apk_files
-                .into_iter()
-                .map(|f| (f.id, f.variant_label))
-                .collect();
-
             let post = build_apk_post_data(
                 &data.app_name,
                 &data.version,
+                data.description.clone(),
                 data.changelog.clone(),
                 data.diff_url.clone(),
                 data.cover_image_file_id.clone(),
                 data.tags.clone(),
-                &apk_tuples,
             );
 
             let preview_text = render_post_text(&post);

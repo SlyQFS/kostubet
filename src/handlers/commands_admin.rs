@@ -250,7 +250,7 @@ pub async fn handle_track(bot: &Bot, msg: &Message, args: &str, db: &Database) -
 
     match db
         .tools()
-        .add_tool(&repo.owner, &repo.name, sender_id)
+        .add_tool(&repo.owner, &repo.name, sender_id, None)
         .await
     {
         Ok(tool_id) => {
@@ -677,6 +677,7 @@ pub async fn handle_test(
 
     let sample_post = PostData {
         title: "Tokio v1.42.0".to_string(),
+        description: Some("Асинхронный runtime для Rust".to_string()),
         body: Some(
             "# Tokio v1.42.0 Highlights\n\n\
             - **Async Scheduling**: Improved task scheduling algorithms\n\

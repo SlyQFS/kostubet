@@ -14,12 +14,13 @@ use teloxide::types::{
 #[derive(Debug, Clone)]
 pub enum DownloadTarget {
     Url(String),
-    CallbackData(String),
 }
 
 #[derive(Debug, Clone)]
 pub struct PostData {
     pub title: String,
+    /// Optional short description of the repo/app, shown under the title.
+    pub description: Option<String>,
     pub body: Option<String>,
     pub diff_url: Option<String>,
     pub tags: Vec<String>,
@@ -28,30 +29,25 @@ pub struct PostData {
 }
 
 /// Helper function to construct unified `PostData` for custom APK releases.
+/// APK files themselves are delivered as documents right after the card
+/// (see `send_apk_documents`), so the card carries no download buttons.
 pub fn build_apk_post_data(
     app_name: &str,
     version: &str,
+    description: Option<String>,
     changelog: Option<String>,
     diff_url: Option<String>,
     cover_image: Option<String>,
     tags: Vec<String>,
-    apk_files: &[(i64, String)], // (file_row_id, variant_label)
 ) -> PostData {
     PostData {
         title: format!("{} v{}", app_name, version),
+        description,
         body: changelog,
         diff_url,
         tags,
         cover_image,
-        download_buttons: apk_files
-            .iter()
-            .map(|(id, variant)| {
-                (
-                    format!("⬇️ Скачать ({})", variant),
-                    DownloadTarget::CallbackData(format!("apk_get:{}", id)),
-                )
-            })
-            .collect(),
+        download_buttons: Vec::new(),
     }
 }
 
@@ -397,12 +393,25 @@ fn render_body_limited(md: &str, max_chars: usize) -> (String, bool) {
 
 // Order of card sections:
 // 1. Title (🆕 <b>...</b>)
-// 2. Body (<blockquote expandable>...</blockquote>)
-// 3. Diff URL (🔗 <a href="...">...</a>)
-// 4. Tags (#tag1 #tag2)
-// 5. Download buttons (InlineKeyboardMarkup)
+// 2. Description (📝 <i>...</i>)
+// 3. Body (<blockquote expandable>...</blockquote>)
+// 4. Diff URL (🔗 <a href="...">...</a>)
+// 5. Tags (#tag1 #tag2)
+// 6. Download buttons (InlineKeyboardMarkup)
 pub fn render_post_text(post: &PostData) -> String {
     let mut card = format!("🆕 <b>{}</b>", encode_text(&post.title));
+
+    if let Some(ref description) = post.description {
+        let trimmed = description.trim();
+        if !trimmed.is_empty() {
+            let max_len = 500;
+            let mut desc: String = encode_text(trimmed).into_owned();
+            if desc.chars().count() > max_len {
+                desc = desc.chars().take(max_len).collect::<String>() + "…";
+            }
+            card.push_str(&format!("\n\n📝 <i>{}</i>", desc));
+        }
+    }
 
     if let Some(ref body) = post.body {
         let trimmed = body.trim();
@@ -461,9 +470,6 @@ pub fn render_post_keyboard(post: &PostData) -> Option<InlineKeyboardMarkup> {
                 reqwest::Url::parse(url)
                     .unwrap_or_else(|_| reqwest::Url::parse("https://github.com").unwrap()),
             ),
-            DownloadTarget::CallbackData(data) => {
-                InlineKeyboardButton::callback(label.clone(), data.clone())
-            }
         };
         rows.push(vec![btn]);
     }
@@ -639,6 +645,57 @@ async fn send_text_card(
     Ok(msg)
 }
 
+/// Sends APK files of a published version as documents right after the card.
+/// Files are resent by their stored Telegram `file_id`, so the bot keeps
+/// nothing on its own server. Returns a list of per-file error descriptions
+/// (empty when everything was delivered).
+pub async fn send_apk_documents(
+    bot: &Bot,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    files: &[crate::db::custom_apps::CustomAppApkFileRecord],
+    app_name: &str,
+    version: &str,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    for file in files {
+        let caption = format!(
+            "📦 <b>{}</b> v{} ({})",
+            encode_text(app_name),
+            encode_text(version),
+            encode_text(&file.variant_label)
+        );
+
+        let bot_clone = bot.clone();
+        let file_id = file.file_id.clone();
+        let caption_clone = caption.clone();
+        let result = execute_telegram_with_retry(move || {
+            let mut req = bot_clone
+                .send_document(ChatId(chat_id), InputFile::file_id(file_id.clone()))
+                .caption(caption_clone.clone())
+                .parse_mode(ParseMode::Html);
+
+            if let Some(tid) = thread_id {
+                req = req.message_thread_id(ThreadId(MessageId(tid as i32)));
+            }
+            req.send()
+        })
+        .await;
+
+        if let Err(e) = result {
+            let label = file
+                .file_name
+                .clone()
+                .unwrap_or_else(|| file.variant_label.clone());
+            tracing::error!("Failed to deliver APK file {}: {:?}", label, e);
+            errors.push(format!("{} ({})", label, e));
+        }
+    }
+
+    errors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,6 +704,7 @@ mod tests {
     fn test_render_post_text() {
         let post = PostData {
             title: "Tokio v1.40.0".to_string(),
+            description: Some("Async runtime for Rust".to_string()),
             body: Some("Added **async** driver".to_string()),
             diff_url: Some(
                 "https://github.com/tokio-rs/tokio/compare/v1.39.0...v1.40.0".to_string(),
@@ -661,11 +719,31 @@ mod tests {
 
         let rendered = render_post_text(&post);
         assert!(rendered.contains("🆕 <b>Tokio v1.40.0</b>"));
+        assert!(rendered.contains("📝 <i>Async runtime for Rust</i>"));
         assert!(rendered.contains("<blockquote expandable>Added <b>async</b> driver</blockquote>"));
         assert!(rendered.contains("#async #rust"));
 
         let kb = render_post_keyboard(&post);
         assert!(kb.is_some());
+    }
+
+    #[test]
+    fn test_render_post_text_description_truncated() {
+        let long_desc = "x".repeat(600);
+        let post = PostData {
+            title: "App".to_string(),
+            description: Some(long_desc),
+            body: None,
+            diff_url: None,
+            tags: vec![],
+            cover_image: None,
+            download_buttons: vec![],
+        };
+
+        let rendered = render_post_text(&post);
+        assert!(rendered.contains("📝 <i>"));
+        assert!(rendered.contains("…</i>"));
+        assert!(rendered.chars().count() < 700);
     }
 
     #[test]
@@ -699,18 +777,19 @@ mod tests {
         let post = build_apk_post_data(
             "V2RayNG",
             "1.8.5",
+            Some("VPN client for Android".to_string()),
             Some("Fixed bugs".to_string()),
             Some("https://github.com/2dust/v2rayNG".to_string()),
             Some("file_img_123".to_string()),
             vec!["vpn".to_string(), "android".to_string()],
-            &[(1, "arm64-v8a".to_string()), (2, "universal".to_string())],
         );
 
         assert_eq!(post.title, "V2RayNG v1.8.5");
+        assert_eq!(post.description.as_deref(), Some("VPN client for Android"));
         assert_eq!(post.tags, vec!["vpn", "android"]);
         assert_eq!(post.cover_image, Some("file_img_123".to_string()));
-        assert_eq!(post.download_buttons.len(), 2);
-        assert_eq!(post.download_buttons[0].0, "⬇️ Скачать (arm64-v8a)");
+        // APK files are delivered as documents after the card, not as buttons.
+        assert!(post.download_buttons.is_empty());
     }
 
     #[test]
@@ -778,6 +857,7 @@ mod tests {
 
         let post = PostData {
             title: "Big Release".to_string(),
+            description: None,
             body: Some(long_md),
             diff_url: None,
             tags: vec![],
@@ -811,6 +891,7 @@ mod tests {
     fn test_render_post_text_strips_images_from_body() {
         let post = PostData {
             title: "X".to_string(),
+            description: None,
             body: Some("See ![screenshot](https://ex.com/1.png) changes".to_string()),
             diff_url: None,
             tags: vec![],

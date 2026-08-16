@@ -25,3 +25,19 @@ pub use suggest::{handle_suggest_message, send_suggest_confirm, validate_new_sug
 
 /// The single dialogue handle type used across handlers (defined once).
 pub type BotDialogue = Dialogue<DialogueState, SqliteDialogueStorage>;
+
+/// Maximum accepted length of an optional description, in characters.
+pub const MAX_DESCRIPTION_LEN: usize = 500;
+
+/// Validates optional description input. Returns a user-facing error message
+/// when the text exceeds the limit.
+pub fn validate_description(text: &str) -> Result<(), String> {
+    if text.chars().count() > MAX_DESCRIPTION_LEN {
+        Err(format!(
+            "❌ Описание слишком длинное (максимум {} символов).",
+            MAX_DESCRIPTION_LEN
+        ))
+    } else {
+        Ok(())
+    }
+}

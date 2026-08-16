@@ -19,6 +19,8 @@ pub struct TrackedToolRecord {
     pub added_by: i64,
     #[allow(dead_code)]
     pub added_at: String,
+    /// Optional human-readable description shown in release cards.
+    pub description: Option<String>,
 }
 
 impl TrackedToolRecord {
@@ -36,6 +38,7 @@ impl TrackedToolRecord {
             fail_count: r.get::<i64, _>("fail_count"),
             added_by: r.get("added_by"),
             added_at: r.get("added_at"),
+            description: r.get("description"),
         }
     }
 }
@@ -49,26 +52,49 @@ impl<'a> ToolsRepo<'a> {
         Self { pool }
     }
 
-    pub async fn add_tool(&self, owner: &str, repo: &str, added_by: i64) -> Result<i64> {
+    pub async fn add_tool(
+        &self,
+        owner: &str,
+        repo: &str,
+        added_by: i64,
+        description: Option<&str>,
+    ) -> Result<i64> {
         let existing = self.get_tool(owner, repo).await?;
         if let Some(tool) = existing {
+            // The tool may already exist (e.g. tracked manually while a
+            // suggestion was pending): apply the description, never clear it.
+            if description.is_some() && tool.description.as_deref() != description {
+                self.set_tool_description(tool.id, description).await?;
+            }
             return Ok(tool.id);
         }
 
         let res = sqlx::query(
             r#"
-            INSERT INTO tracked_tools (owner, repo, added_by, added_at)
-            VALUES (?, ?, ?, datetime('now'))
+            INSERT INTO tracked_tools (owner, repo, added_by, added_at, description)
+            VALUES (?, ?, ?, datetime('now'), ?)
             "#,
         )
         .bind(owner)
         .bind(repo)
         .bind(added_by)
+        .bind(description)
         .execute(self.pool)
         .await
         .context("Failed to insert tracked tool")?;
 
         Ok(res.last_insert_rowid())
+    }
+
+    /// Sets or clears (None) the optional description of a tracked tool.
+    pub async fn set_tool_description(&self, id: i64, description: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE tracked_tools SET description = ? WHERE id = ?")
+            .bind(description)
+            .bind(id)
+            .execute(self.pool)
+            .await
+            .context("Failed to update tracked tool description")?;
+        Ok(())
     }
 
     pub async fn remove_tool(&self, owner: &str, repo: &str) -> Result<bool> {
@@ -94,7 +120,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool(&self, owner: &str, repo: &str) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description
             FROM tracked_tools
             WHERE owner = ? AND repo = ?
             "#,
@@ -111,7 +137,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool_by_id(&self, id: i64) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description
             FROM tracked_tools
             WHERE id = ?
             "#,
@@ -127,7 +153,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn list_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description
             FROM tracked_tools
             ORDER BY owner ASC, repo ASC
             "#,
@@ -193,7 +219,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn list_failing_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description
             FROM tracked_tools
             WHERE fail_count > 0
             ORDER BY fail_count DESC, owner ASC

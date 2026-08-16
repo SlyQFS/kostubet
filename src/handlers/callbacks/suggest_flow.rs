@@ -20,6 +20,7 @@ async fn file_suggestion(
     owner: &str,
     name: &str,
     tags: &[String],
+    description: Option<&str>,
 ) -> Result<()> {
     let tags_str = if tags.is_empty() {
         None
@@ -34,7 +35,14 @@ async fn file_suggestion(
 
     let sugg_id = db
         .suggestions()
-        .create_suggestion(user_id, username.as_deref(), owner, name, tags_str.as_deref())
+        .create_suggestion(
+            user_id,
+            username.as_deref(),
+            owner,
+            name,
+            tags_str.as_deref(),
+            description,
+        )
         .await?;
 
     dialogue.exit().await?;
@@ -70,19 +78,28 @@ async fn file_suggestion(
         None => format!("<code>{}</code>", user_id),
     };
 
+    let desc_note = match description {
+        Some(d) => format!(
+            "\n📝 Описание: <i>{}</i>",
+            html_escape::encode_text(d.trim())
+        ),
+        None => String::new(),
+    };
+
     let admin_notice = format!(
         "💡 <b>Новая заявка на отслеживание репозитория #{}</b>\n\
-        📦 Репозиторий: <code>{}/{}</code>\n\
+        📦 Репозиторий: <code>{}/{}</code>{}\n\
         🏷️ Предложенные теги: <code>{}</code>\n\
         👤 Автор: {}",
         sugg_id,
         owner,
         name,
+        desc_note,
         tags_str.as_deref().unwrap_or("нет"),
         user_info
     );
 
-    super::notify_admins(bot, db, admin_notice, Some(kb)).await?;
+    super::notify_admins(bot, db, admin_notice, Some(kb), None).await?;
 
     Ok(())
 }
@@ -139,8 +156,31 @@ pub async fn handle_suggest_flow(
                 &data.owner,
                 &data.name,
                 &data.tags,
+                data.description.as_deref(),
             )
             .await
+        }
+        ("desc", SuggestState::Confirm { data }) => {
+            let cur_desc = data.description.clone().unwrap_or_default();
+            dialogue
+                .update(DialogueState::Suggest(SuggestState::WaitingDescription { data }))
+                .await?;
+            if let Some(msg) = &q.message {
+                let _ = bot
+                    .edit_message_text(
+                        msg.chat().id,
+                        msg.id(),
+                        format!(
+                            "📝 Введите описание репозитория (что это за инструмент) — оно будет показано администраторам и применится при одобрении.\n\
+                            Текущее: <i>{}</i>\n\n\
+                            Отправьте текст или <code>/skip</code>, чтобы оставить без описания:",
+                            html_escape::encode_text(cur_desc.trim())
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await;
+            }
+            Ok(())
         }
         ("tags", SuggestState::Confirm { data }) => {
             dialogue

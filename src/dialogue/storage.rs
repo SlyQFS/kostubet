@@ -166,6 +166,7 @@ mod tests {
                 app_id: None,
                 slug: "test-app".to_string(),
                 name: "Test App".to_string(),
+                description: Some("Test description".to_string()),
                 version: "1.0.0".to_string(),
                 title: None,
                 changelog: None,

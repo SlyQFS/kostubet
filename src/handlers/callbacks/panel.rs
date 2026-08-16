@@ -220,21 +220,30 @@ async fn repo_detail_view(db: &Database, tool_id: i64) -> Result<(String, Inline
             .join(" ")
     };
 
+    let desc_line = match tool.description.as_deref() {
+        Some(d) if !d.trim().is_empty() => {
+            format!("\n📝 Описание: <i>{}</i>", encode_text(d.trim()))
+        }
+        _ => "\n📝 Описание: <i>не задано</i>".to_string(),
+    };
+
     let text = format!(
-        "📦 <b>{}</b>\n\n\
-        🔖 Последний релиз: <code>{}</code>\n\
-        🏷 Теги: <code>{}</code>",
+        "📦 <b>{}</b>\n{}\n🔖 Последний релиз: <code>{}</code>\n🏷 Теги: <code>{}</code>",
         encode_text(&tool.full_name()),
+        desc_line,
         encode_text(tool.last_release.as_deref().unwrap_or("нет релизов")),
         encode_text(&tags_str),
     );
 
     let kb = InlineKeyboardMarkup::new(vec![
         vec![
+            btn("📝 Описание", format!("adm:repodesc:{}", tool.id)),
             btn("🏷 Теги", format!("adm:repotags:{}", tool.id)),
-            btn("🗑 Убрать", format!("adm:repountrack:{}", tool.id)),
         ],
-        vec![btn("⬅️ К списку", "adm:repos:0")],
+        vec![
+            btn("🗑 Убрать", format!("adm:repountrack:{}", tool.id)),
+            btn("⬅️ К списку", "adm:repos:0"),
+        ],
     ]);
 
     Ok((text, kb))
@@ -560,7 +569,7 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
     let chunk = &apps[page * APPS_PAGE_SIZE..(page * APPS_PAGE_SIZE + APPS_PAGE_SIZE).min(apps.len())];
 
     let mut text = format!(
-        "📱 <b>Опубликованные приложения</b> ({}, стр. {}/{})\n\nℹ️ Нажмите на приложение, чтобы удалить его.",
+        "📱 <b>Опубликованные приложения</b> ({}, стр. {}/{})\n\nℹ️ 📝 — изменить описание, 🗑 — удалить.",
         apps.len(),
         page + 1,
         pages
@@ -580,10 +589,10 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
             .map(|v| format!(" (v{})", encode_text(&v.version)))
             .unwrap_or_default();
         text.push_str(&format!("\n• <b>{}</b>{}", encode_text(&app.name), ver_str));
-        rows.push(vec![btn(
-            format!("🗑 {}{}", app.name, ver_str),
-            format!("adm:appdel:{}", app.id),
-        )]);
+        rows.push(vec![
+            btn("📝", format!("adm:appdesc:{}", app.id)),
+            btn(format!("🗑 {}{}", app.name, ver_str), format!("adm:appdel:{}", app.id)),
+        ]);
     }
 
     rows.extend(nav_row("adm:apps", page, pages));
@@ -758,7 +767,7 @@ pub async fn handle_panel_callback(
 
         let silent = mode == "silent";
         dialogue
-            .update(DialogueState::Admin(Box::new(AdminState::RepoTags {
+            .update(DialogueState::Admin(Box::new(AdminState::RepoDesc {
                 owner,
                 name,
                 silent,
@@ -776,8 +785,8 @@ pub async fn handle_panel_callback(
                     msg.chat().id,
                     msg.id(),
                     format!(
-                        "🏷 Введите теги для репозитория через пробел (например: <code>rust network</code>)\n\
-                        или отправьте <code>/done</code>, чтобы добавить без тегов.\n\n{}",
+                        "📝 Введите описание репозитория (что это за инструмент) — оно будет показываться в карточках релизов.\n\
+                        Отправьте <code>/skip</code>, чтобы добавить без описания.\n\n{}",
                         mode_note
                     ),
                 )
@@ -810,6 +819,68 @@ pub async fn handle_panel_callback(
         }
         let (text, kb) = repos_page_view(db, 0).await?;
         return edit_or_send(bot, q, text, kb).await;
+    }
+
+    if let Some(id_str) = rest.strip_prefix("repodesc:") {
+        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
+            return Ok(());
+        };
+        dialogue
+            .update(DialogueState::Admin(Box::new(AdminState::RepoDescription {
+                tool_id,
+            })))
+            .await?;
+        if let Some(msg) = &q.message {
+            let cur_desc = tool
+                .description
+                .as_deref()
+                .unwrap_or("не задано")
+                .to_string();
+            bot.send_message(
+                msg.chat().id,
+                format!(
+                    "📝 <b>Описание репозитория {}</b>\n\
+                    Текущее: <i>{}</i>\n\n\
+                    Отправьте новое описание, <code>/skip</code> — оставить как есть, <code>/clear</code> — удалить.\n\
+                    Отмена: <code>/cancel</code>",
+                    encode_text(&tool.full_name()),
+                    encode_text(&cur_desc)
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        return Ok(());
+    }
+
+    if let Some(id_str) = rest.strip_prefix("appdesc:") {
+        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+            return Ok(());
+        };
+        dialogue
+            .update(DialogueState::Admin(Box::new(AdminState::AppDescription {
+                app_id,
+            })))
+            .await?;
+        if let Some(msg) = &q.message {
+            let cur_desc = app.description.as_deref().unwrap_or("не задано").to_string();
+            bot.send_message(
+                msg.chat().id,
+                format!(
+                    "📝 <b>Описание приложения {}</b>\n\
+                    Текущее: <i>{}</i>\n\n\
+                    Отправьте новое описание, <code>/skip</code> — оставить как есть, <code>/clear</code> — удалить.\n\
+                    Отмена: <code>/cancel</code>",
+                    encode_text(&app.name),
+                    encode_text(&cur_desc)
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        return Ok(());
     }
 
     if let Some(id_str) = rest.strip_prefix("repotags:") {
@@ -1046,8 +1117,8 @@ pub async fn handle_apps_page_callback(
 }
 
 /// Public: renders a full app card as a new message (opened from `/apps`).
-/// Uses `send_post`, so the user-uploaded cover photo and the download
-/// keyboard are included, exactly like in the published supergroup card.
+/// Uses `send_post` (cover photo included) and then delivers the APK files
+/// as documents, exactly like in the published supergroup topic.
 pub async fn handle_appcard_callback(
     bot: &Bot,
     q: &CallbackQuery,
@@ -1077,10 +1148,6 @@ pub async fn handle_appcard_callback(
     };
 
     let apk_files = db.custom_apps().get_apk_files(ver.id).await?;
-    let apk_tuples: Vec<(i64, String)> = apk_files
-        .into_iter()
-        .map(|f| (f.id, f.variant_label))
-        .collect();
 
     let tags = db
         .tags()
@@ -1094,13 +1161,25 @@ pub async fn handle_appcard_callback(
     let post = build_apk_post_data(
         &app.name,
         &ver.version,
+        app.description.clone(),
         ver.changelog.clone(),
         ver.diff_url.clone(),
         ver.cover_image_file_id.clone(),
         tags,
-        &apk_tuples,
     );
 
     crate::services::render::send_post(bot, chat_id.0, None, &post).await?;
+
+    // Deliver the APK files as documents right after the card, exactly like
+    // in the published supergroup topic.
+    let _ = crate::services::render::send_apk_documents(
+        bot,
+        chat_id.0,
+        None,
+        &apk_files,
+        &app.name,
+        &ver.version,
+    )
+    .await;
     Ok(())
 }

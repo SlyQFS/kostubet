@@ -96,6 +96,7 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                             "{}/{} • {}",
                                             tool.owner, tool.repo, update.title
                                         ),
+                                        description: tool.description.clone(),
                                         body: update.body,
                                         diff_url: Some(update.url),
                                         tags: tag_names,
@@ -194,6 +195,7 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                                 tool.owner, tool.repo
                                             ),
                                             Some(kb),
+                                            None,
                                         )
                                         .await;
                                     }

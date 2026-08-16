@@ -14,6 +14,8 @@ pub struct SuggestionRecord {
     pub owner: String,
     pub repo: String,
     pub proposed_tags: Option<String>,
+    /// Optional description proposed by the author; applied to the tool on approval.
+    pub proposed_description: Option<String>,
     pub status: String,
     #[allow(dead_code)]
     pub reviewed_by: Option<i64>,
@@ -44,11 +46,12 @@ impl<'a> SuggestionsRepo<'a> {
         owner: &str,
         repo: &str,
         proposed_tags: Option<&str>,
+        proposed_description: Option<&str>,
     ) -> Result<i64> {
         let res = sqlx::query(
             r#"
-            INSERT INTO suggestions (user_id, username, owner, repo, proposed_tags, status, created_at)
-            VALUES (?, ?, ?, ?, ?, 'pending', datetime('now'))
+            INSERT INTO suggestions (user_id, username, owner, repo, proposed_tags, proposed_description, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
             "#,
         )
         .bind(user_id)
@@ -56,6 +59,7 @@ impl<'a> SuggestionsRepo<'a> {
         .bind(owner)
         .bind(repo)
         .bind(proposed_tags)
+        .bind(proposed_description)
         .execute(self.pool)
         .await
         .context("Failed to create suggestion")?;
@@ -78,7 +82,7 @@ impl<'a> SuggestionsRepo<'a> {
     pub async fn get_pending_suggestions(&self) -> Result<Vec<SuggestionRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, username, owner, repo, proposed_tags, status, reviewed_by, reviewed_at, created_at
+            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, status, reviewed_by, reviewed_at, created_at
             FROM suggestions
             WHERE status = 'pending'
             ORDER BY created_at ASC
@@ -97,6 +101,7 @@ impl<'a> SuggestionsRepo<'a> {
                 owner: r.get("owner"),
                 repo: r.get("repo"),
                 proposed_tags: r.get("proposed_tags"),
+                proposed_description: r.get("proposed_description"),
                 status: r.get("status"),
                 reviewed_by: r.get("reviewed_by"),
                 reviewed_at: r.get("reviewed_at"),
@@ -113,7 +118,7 @@ impl<'a> SuggestionsRepo<'a> {
     ) -> Result<Option<SuggestionRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, username, owner, repo, proposed_tags, status, reviewed_by, reviewed_at, created_at
+            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, status, reviewed_by, reviewed_at, created_at
             FROM suggestions
             WHERE status = 'pending' AND owner = ? AND repo = ?
             LIMIT 1
@@ -132,6 +137,7 @@ impl<'a> SuggestionsRepo<'a> {
             owner: r.get("owner"),
             repo: r.get("repo"),
             proposed_tags: r.get("proposed_tags"),
+            proposed_description: r.get("proposed_description"),
             status: r.get("status"),
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
@@ -142,7 +148,7 @@ impl<'a> SuggestionsRepo<'a> {
     pub async fn get_suggestion(&self, id: i64) -> Result<Option<SuggestionRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, username, owner, repo, proposed_tags, status, reviewed_by, reviewed_at, created_at
+            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, status, reviewed_by, reviewed_at, created_at
             FROM suggestions
             WHERE id = ?
             "#,
@@ -159,6 +165,7 @@ impl<'a> SuggestionsRepo<'a> {
             owner: r.get("owner"),
             repo: r.get("repo"),
             proposed_tags: r.get("proposed_tags"),
+            proposed_description: r.get("proposed_description"),
             status: r.get("status"),
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
@@ -169,7 +176,7 @@ impl<'a> SuggestionsRepo<'a> {
     pub async fn get_user_suggestions(&self, user_id: i64) -> Result<Vec<SuggestionRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, username, owner, repo, proposed_tags, status, reviewed_by, reviewed_at, created_at
+            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, status, reviewed_by, reviewed_at, created_at
             FROM suggestions
             WHERE user_id = ?
             ORDER BY created_at DESC
@@ -190,6 +197,7 @@ impl<'a> SuggestionsRepo<'a> {
                 owner: r.get("owner"),
                 repo: r.get("repo"),
                 proposed_tags: r.get("proposed_tags"),
+                proposed_description: r.get("proposed_description"),
                 status: r.get("status"),
                 reviewed_by: r.get("reviewed_by"),
                 reviewed_at: r.get("reviewed_at"),

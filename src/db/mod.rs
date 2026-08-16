@@ -109,6 +109,7 @@ impl Database {
                 etag         TEXT,
                 added_by     INTEGER NOT NULL DEFAULT 0,
                 added_at     TEXT NOT NULL,
+                description  TEXT,
                 UNIQUE(owner, repo)
             );
 
@@ -128,16 +129,17 @@ impl Database {
 
             -- Repository suggestions
             CREATE TABLE IF NOT EXISTS suggestions (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id       INTEGER NOT NULL,
-                username      TEXT,
-                owner         TEXT NOT NULL,
-                repo          TEXT NOT NULL,
-                proposed_tags TEXT,
-                status        TEXT NOT NULL DEFAULT 'pending',
-                reviewed_by   INTEGER,
-                reviewed_at   TEXT,
-                created_at    TEXT NOT NULL
+                id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id              INTEGER NOT NULL,
+                username             TEXT,
+                owner                TEXT NOT NULL,
+                repo                 TEXT NOT NULL,
+                proposed_tags        TEXT,
+                proposed_description TEXT,
+                status               TEXT NOT NULL DEFAULT 'pending',
+                reviewed_by          INTEGER,
+                reviewed_at          TEXT,
+                created_at           TEXT NOT NULL
             );
 
             -- Custom applications
@@ -145,6 +147,7 @@ impl Database {
                 id                 INTEGER PRIMARY KEY AUTOINCREMENT,
                 slug               TEXT UNIQUE NOT NULL,
                 name               TEXT NOT NULL,
+                description        TEXT,
                 current_version_id INTEGER,
                 created_by         INTEGER NOT NULL,
                 created_at         TEXT NOT NULL
@@ -215,6 +218,27 @@ impl Database {
             let _ = sqlx::query("ALTER TABLE tracked_tools ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0;")
                 .execute(&self.pool)
                 .await;
+        }
+
+        // Idempotent check: optional description columns (repo / suggestion / app)
+        for (table, column) in [
+            ("tracked_tools", "description"),
+            ("suggestions", "proposed_description"),
+            ("custom_apps", "description"),
+        ] {
+            let has_column: Option<i64> = sqlx::query_scalar(&format!(
+                "SELECT COUNT(1) FROM pragma_table_info('{}') WHERE name = '{}';",
+                table, column
+            ))
+            .fetch_optional(&self.pool)
+            .await
+            .unwrap_or(None);
+
+            if has_column == Some(0) {
+                let _ = sqlx::query(&format!("ALTER TABLE {} ADD COLUMN {} TEXT;", table, column))
+                    .execute(&self.pool)
+                    .await;
+            }
         }
 
         // Race-proof dedup of pending suggestions at the DB level
@@ -300,7 +324,10 @@ mod tests {
         assert!(db.admins().remove_admin(100).await.is_err());
 
         // 2. Tools, Tags & ETag
-        let tool_id = db.tools().add_tool("tokio-rs", "tokio", 100).await?;
+        let tool_id = db
+            .tools()
+            .add_tool("tokio-rs", "tokio", 100, Some("Async runtime"))
+            .await?;
         let tag_id = db.tags().get_or_create_tag("async").await?;
         db.tags()
             .attach_tag(ItemType::Tool, tool_id, tag_id)
@@ -316,6 +343,20 @@ mod tests {
         let tool = db.tools().get_tool("tokio-rs", "tokio").await?.unwrap();
         assert_eq!(tool.last_release.as_deref(), Some("v1.40.0"));
         assert_eq!(tool.etag.as_deref(), Some("W/\"etag_123\""));
+        assert_eq!(tool.description.as_deref(), Some("Async runtime"));
+
+        db.tools()
+            .set_tool_description(tool_id, Some("Updated description"))
+            .await?;
+        assert_eq!(
+            db.tools().get_tool_by_id(tool_id).await?.unwrap().description.as_deref(),
+            Some("Updated description")
+        );
+        db.tools().set_tool_description(tool_id, None).await?;
+        assert_eq!(
+            db.tools().get_tool_by_id(tool_id).await?.unwrap().description,
+            None
+        );
 
         // 3. Suggestions
         let sugg_id = db
@@ -326,9 +367,14 @@ mod tests {
                 "rust-lang",
                 "rust",
                 Some("compiler, language"),
+                Some("The Rust compiler"),
             )
             .await?;
         assert_eq!(db.suggestions().count_pending_for_user(400).await?, 1);
+        assert_eq!(
+            db.suggestions().get_suggestion(sugg_id).await?.unwrap().proposed_description.as_deref(),
+            Some("The Rust compiler")
+        );
 
         let updated = db
             .suggestions()
@@ -340,8 +386,16 @@ mod tests {
         // 4. Custom apps
         let app = db
             .custom_apps()
-            .get_or_create_app("test-app", "Test App", 400)
+            .get_or_create_app("test-app", "Test App", Some("A test application"), 400)
             .await?;
+        assert_eq!(app.description.as_deref(), Some("A test application"));
+        db.custom_apps()
+            .set_app_description(app.id, Some("Edited description"))
+            .await?;
+        assert_eq!(
+            db.custom_apps().get_app_by_id(app.id).await?.unwrap().description.as_deref(),
+            Some("Edited description")
+        );
         let ver_id = db
             .custom_apps()
             .create_version(
@@ -383,6 +437,86 @@ mod tests {
         let current = db.custom_apps().get_current_version(app.id).await?.unwrap();
         assert_eq!(current.version, "1.0.0");
         assert_eq!(current.published_message_id, Some(777));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_description_columns_migrated_on_legacy_tables() -> Result<()> {
+        let pool = SqlitePool::connect(":memory:").await?;
+
+        // Old-schema tables without the description columns.
+        sqlx::query(
+            r#"
+            CREATE TABLE tracked_tools (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                last_release TEXT,
+                etag TEXT,
+                added_by INTEGER NOT NULL DEFAULT 0,
+                added_at TEXT NOT NULL,
+                UNIQUE(owner, repo)
+            );
+            INSERT INTO tracked_tools (owner, repo, added_by, added_at)
+            VALUES ('tokio-rs', 'tokio', 1, datetime('now'));
+
+            CREATE TABLE suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                username TEXT,
+                owner TEXT NOT NULL,
+                repo TEXT NOT NULL,
+                proposed_tags TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                reviewed_by INTEGER,
+                reviewed_at TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE custom_apps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slug TEXT UNIQUE NOT NULL,
+                name TEXT NOT NULL,
+                current_version_id INTEGER,
+                created_by INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        let db = Database { pool: pool.clone() };
+        db.init_schema().await?;
+
+        // The migration must have added the columns and existing data survives.
+        let tool = db.tools().get_tool("tokio-rs", "tokio").await?.unwrap();
+        assert_eq!(tool.description, None);
+
+        let tool_id = db
+            .tools()
+            .add_tool("tokio-rs", "tokio", 1, Some("desc"))
+            .await?;
+        assert_eq!(
+            db.tools().get_tool_by_id(tool_id).await?.unwrap().description.as_deref(),
+            Some("desc")
+        );
+
+        let sugg_id = db
+            .suggestions()
+            .create_suggestion(10, None, "a", "b", None, Some("sd"))
+            .await?;
+        assert_eq!(
+            db.suggestions().get_suggestion(sugg_id).await?.unwrap().proposed_description.as_deref(),
+            Some("sd")
+        );
+
+        let app = db
+            .custom_apps()
+            .get_or_create_app("x", "X", Some("ad"), 10)
+            .await?;
+        assert_eq!(app.description.as_deref(), Some("ad"));
 
         Ok(())
     }

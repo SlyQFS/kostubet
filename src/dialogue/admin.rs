@@ -1,15 +1,17 @@
 //! Admin dialogue for button-driven management flows.
 //!
 //! Handles text input steps started from the admin panel inline keyboards:
-//! adding a tracked repository (link -> mode -> optional tags), and creating
-//! tags (globally or attached to a specific item).
+//! adding a tracked repository (link -> mode -> optional description ->
+//! optional tags), editing repo/app descriptions, and creating tags
+//! (globally or attached to a specific item).
 
 use crate::config::RepoConfig;
 use crate::db::tags::ItemType;
 use crate::db::Database;
 use crate::dialogue::state::{AdminState, DialogueState};
-use crate::dialogue::BotDialogue;
+use crate::dialogue::{validate_description, BotDialogue};
 use anyhow::Result;
+use html_escape::encode_text;
 use std::str::FromStr;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
@@ -137,10 +139,56 @@ pub async fn handle_admin_message(
             .await?;
         }
 
+        AdminState::RepoDesc {
+            owner,
+            name,
+            silent,
+        } => {
+            let mut description: Option<String> = None;
+            if text != "/skip" && !text.is_empty() {
+                if let Err(err) = validate_description(&text) {
+                    bot.send_message(
+                        chat_id,
+                        format!("{}\n\nПовторите ввод или отправьте <code>/skip</code>.", err),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                    return Ok(());
+                }
+                description = Some(text.clone());
+            }
+
+            dialogue
+                .update(DialogueState::Admin(Box::new(AdminState::RepoTags {
+                    owner,
+                    name,
+                    silent,
+                    description,
+                })))
+                .await?;
+
+            let mode_note = if silent {
+                "🔇 Текущий релиз будет пропущен."
+            } else {
+                "📣 Текущий релиз будет опубликован при первом опросе."
+            };
+            bot.send_message(
+                chat_id,
+                format!(
+                    "🏷 Введите теги для репозитория через пробел (например: <code>rust network</code>)\n\
+                    или отправьте <code>/done</code>, чтобы добавить без тегов.\n\n{}",
+                    mode_note
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+
         AdminState::RepoTags {
             owner,
             name,
             silent,
+            description,
         } => {
             let tags: Vec<String> = if text == "/done" || text == "/skip" {
                 Vec::new()
@@ -151,7 +199,10 @@ pub async fn handle_admin_message(
                     .collect()
             };
 
-            let tool_id = db.tools().add_tool(&owner, &name, sender_id).await?;
+            let tool_id = db
+                .tools()
+                .add_tool(&owner, &name, sender_id, description.as_deref())
+                .await?;
             if !tags.is_empty() {
                 let _ = db
                     .tags()
@@ -191,6 +242,11 @@ pub async fn handle_admin_message(
                     .join(" ")
             };
 
+            let desc_note = match &description {
+                Some(d) => format!("\n📝 Описание: <i>{}</i>", encode_text(d)),
+                None => String::new(),
+            };
+
             let _ = db
                 .audit()
                 .log_action(sender_id, "добавил репозиторий", &format!("{}/{}", owner, name))
@@ -201,8 +257,146 @@ pub async fn handle_admin_message(
             bot.send_message(
                 chat_id,
                 format!(
-                    "✅ Репозиторий <b>{}/{}</b> добавлен в отслеживание!\nТеги: <code>{}</code>{}",
-                    owner, name, tags_str, silent_note
+                    "✅ Репозиторий <b>{}/{}</b> добавлен в отслеживание!\nТеги: <code>{}</code>{}{}",
+                    owner, name, tags_str, desc_note, silent_note
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+
+        AdminState::RepoDescription { tool_id } => {
+            let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
+                dialogue.exit().await?;
+                bot.send_message(chat_id, "⚠️ Репозиторий не найден (возможно, уже удален).")
+                    .await?;
+                return Ok(());
+            };
+
+            if text == "/skip" {
+                dialogue.exit().await?;
+                bot.send_message(chat_id, "ℹ️ Описание не изменено.").await?;
+                return Ok(());
+            }
+
+            if text == "/clear" {
+                db.tools().set_tool_description(tool_id, None).await?;
+                let _ = db
+                    .audit()
+                    .log_action(
+                        sender_id,
+                        "удалил описание репозитория",
+                        &tool.full_name(),
+                    )
+                    .await;
+                dialogue.exit().await?;
+                bot.send_message(
+                    chat_id,
+                    format!(
+                        "✅ Описание репозитория <b>{}</b> удалено.",
+                        encode_text(&tool.full_name())
+                    ),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+                return Ok(());
+            }
+
+            if text.is_empty() {
+                bot.send_message(
+                    chat_id,
+                    "❌ Описание не может быть пустым. Отправьте текст, <code>/skip</code> (оставить как есть) или <code>/clear</code> (удалить).",
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+                return Ok(());
+            }
+
+            if let Err(err) = validate_description(&text) {
+                bot.send_message(chat_id, err).await?;
+                return Ok(());
+            }
+
+            db.tools()
+                .set_tool_description(tool_id, Some(&text))
+                .await?;
+            let _ = db
+                .audit()
+                .log_action(sender_id, "изменил описание репозитория", &tool.full_name())
+                .await;
+            dialogue.exit().await?;
+            bot.send_message(
+                chat_id,
+                format!(
+                    "✅ Описание репозитория <b>{}</b> обновлено.",
+                    encode_text(&tool.full_name())
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+
+        AdminState::AppDescription { app_id } => {
+            let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+                dialogue.exit().await?;
+                bot.send_message(chat_id, "⚠️ Приложение не найдено (возможно, удалено).")
+                    .await?;
+                return Ok(());
+            };
+
+            if text == "/skip" {
+                dialogue.exit().await?;
+                bot.send_message(chat_id, "ℹ️ Описание не изменено.").await?;
+                return Ok(());
+            }
+
+            if text == "/clear" {
+                db.custom_apps().set_app_description(app_id, None).await?;
+                let _ = db
+                    .audit()
+                    .log_action(sender_id, "удалил описание приложения", &app.name)
+                    .await;
+                dialogue.exit().await?;
+                bot.send_message(
+                    chat_id,
+                    format!(
+                        "✅ Описание приложения <b>{}</b> удалено.",
+                        encode_text(&app.name)
+                    ),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+                return Ok(());
+            }
+
+            if text.is_empty() {
+                bot.send_message(
+                    chat_id,
+                    "❌ Описание не может быть пустым. Отправьте текст, <code>/skip</code> (оставить как есть) или <code>/clear</code> (удалить).",
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+                return Ok(());
+            }
+
+            if let Err(err) = validate_description(&text) {
+                bot.send_message(chat_id, err).await?;
+                return Ok(());
+            }
+
+            db.custom_apps()
+                .set_app_description(app_id, Some(&text))
+                .await?;
+            let _ = db
+                .audit()
+                .log_action(sender_id, "изменил описание приложения", &app.name)
+                .await;
+            dialogue.exit().await?;
+            bot.send_message(
+                chat_id,
+                format!(
+                    "✅ Описание приложения <b>{}</b> обновлено.",
+                    encode_text(&app.name)
                 ),
             )
             .parse_mode(ParseMode::Html)

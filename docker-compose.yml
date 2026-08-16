@@ -17,35 +17,5 @@ services:
       retries: 3
       start_period: 30s
 
-  # Scheduled WAL-safe SQLite backups (online, without stopping the bot).
-  backup:
-    image: alpine:3.20
-    container_name: kostubet-backup
-    restart: unless-stopped
-    environment:
-      BACKUP_INTERVAL_HOURS: "24"
-      BACKUP_KEEP_DAYS: "14"
-    volumes:
-      - kostubet_data:/data:ro
-      - kostubet_backups:/backups
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        apk add --no-cache sqlite >/dev/null 2>&1
-        echo "[backup] service started (every $$BACKUP_INTERVAL_HOURS h, keep $$BACKUP_KEEP_DAYS days)"
-        while true; do
-          if [ -f /data/kostubet.db ]; then
-            ts=$$(date +%F_%H-%M)
-            sqlite3 /data/kostubet.db ".backup '/backups/kostubet-$$ts.db'" \
-              && echo "[backup] saved kostubet-$$ts.db" \
-              || echo "[backup] FAILED at $$ts"
-            find /backups -name 'kostubet-*.db' -mtime +$$BACKUP_KEEP_DAYS -delete
-          else
-            echo "[backup] /data/kostubet.db not found yet"
-          fi
-          sleep "$$BACKUP_INTERVAL_HOURS"h
-        done
-
 volumes:
   kostubet_data:
-  kostubet_backups:

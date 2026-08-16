@@ -1,4 +1,4 @@
-//! Callback query handlers for menu navigation, start onboarding shortcuts, and APK downloads.
+//! Callback query handlers for menu navigation and start onboarding shortcuts.
 
 use crate::db::Database;
 use crate::dialogue::state::{DialogueState, SuggestState};
@@ -6,9 +6,8 @@ use crate::dialogue::BotDialogue;
 use crate::handlers::{commands_admin, commands_public};
 use crate::strings::ACCESS_DENIED;
 use anyhow::Result;
-use html_escape::encode_text;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InputFile, ParseMode};
+use teloxide::types::{ChatId, ParseMode};
 
 pub async fn handle_menu_action(
     bot: &Bot,
@@ -86,62 +85,4 @@ pub async fn handle_start_action(
     Ok(())
 }
 
-pub async fn handle_apk_get(
-    bot: &Bot,
-    q: &CallbackQuery,
-    file_row_id: i64,
-    db: &Database,
-) -> Result<()> {
-    // This handler manages its own callback acknowledgement so that failures
-    // can surface as error alerts instead of silently swallowed spinners.
-    let Some(file_rec) = db.custom_apps().get_apk_file_by_id(file_row_id).await? else {
-        let _ = bot
-            .answer_callback_query(q.id.clone())
-            .text("⚠️ Файл не найден в базе данных. Возможно, заявка была отклонена.")
-            .show_alert(true)
-            .await;
-        return Ok(());
-    };
 
-    let Some(msg) = &q.message else {
-        let _ = bot
-            .answer_callback_query(q.id.clone())
-            .text("⚠️ Не удалось отправить файл.")
-            .show_alert(true)
-            .await;
-        return Ok(());
-    };
-
-    // Drop the loading spinner before the (possibly slow) document upload.
-    let _ = bot.answer_callback_query(q.id.clone()).await;
-
-    let doc = InputFile::file_id(file_rec.file_id);
-    let mut send_req = bot.send_document(msg.chat().id, doc);
-
-    // Deliver the APK into the same forum topic where the download button
-    // lives (in private chats thread_id is None and this is a no-op).
-    if let Some(tid) = msg.regular_message().and_then(|m| m.thread_id) {
-        send_req = send_req.message_thread_id(tid);
-    }
-
-    if let Some(name) = file_rec.file_name {
-        send_req = send_req
-            .caption(format!(
-                "📦 <b>{}</b> ({})",
-                encode_text(&name),
-                file_rec.variant_label
-            ))
-            .parse_mode(ParseMode::Html);
-    }
-
-    if let Err(e) = send_req.await {
-        let _ = bot
-            .send_message(
-                msg.chat().id,
-                format!("⚠️ Не удалось отправить файл: {}", e),
-            )
-            .await;
-    }
-
-    Ok(())
-}

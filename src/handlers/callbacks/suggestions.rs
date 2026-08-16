@@ -63,7 +63,12 @@ pub async fn handle_suggestion_approve(
     // suggestion returns to the queue instead of hanging "approved but untracked".
     let add_result = db
         .tools()
-        .add_tool(&sugg.owner, &sugg.repo, user_id)
+        .add_tool(
+            &sugg.owner,
+            &sugg.repo,
+            user_id,
+            sugg.proposed_description.as_deref(),
+        )
         .await;
 
     let tool_id = match add_result {
