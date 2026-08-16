@@ -275,13 +275,23 @@ pub async fn handle_submit_confirm_send(
             _ => String::new(),
         };
 
+        // Optional card fields: a skipped field is omitted entirely instead of
+        // leaving a placeholder line without a value.
+        let mut fields = String::new();
+        if let Some(t) = data.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            fields.push_str(&format!("\n📌 Заголовок: <code>{}</code>", encode_text(t)));
+        }
+        if let Some(c) = data.changelog.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+            fields.push_str(&format!("\n📝 Changelog: <code>{}</code>", encode_text(c)));
+        }
+        if let Some(d) = data.diff_url.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+            fields.push_str(&format!("\n🔗 Diff: <code>{}</code>", encode_text(d)));
+        }
+
         let admin_notice = format!(
             "📱 <b>Новая заявка на публикацию APK #{}</b>{}\n\
             📦 Приложение: <b>{}</b> (<code>{}</code>){}\n\
-            🔖 Версия: <code>{}</code>\n\
-            📌 Заголовок: <code>{}</code>\n\
-            📝 Changelog: <code>{}</code>\n\
-            🔗 Diff: <code>{}</code>\n\
+            🔖 Версия: <code>{}</code>{}\n\
             👤 Автор: {}\n\
             📁 Файлов APK: <b>{}</b>",
             ver_id,
@@ -290,9 +300,7 @@ pub async fn handle_submit_confirm_send(
             encode_text(&data.slug),
             desc_note,
             encode_text(&data.version),
-            encode_text(data.title.as_deref().unwrap_or("нет")),
-            encode_text(data.changelog.as_deref().unwrap_or("нет")),
-            encode_text(data.diff_url.as_deref().unwrap_or("нет")),
+            fields,
             user_info,
             data.apk_files.len()
         );

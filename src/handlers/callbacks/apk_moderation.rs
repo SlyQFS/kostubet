@@ -333,7 +333,7 @@ pub async fn handle_apk_edit_start(
             format!(
                 "✏️ <b>Редактирование заявки #{}</b>\n\
                 Текущий заголовок: <code>{}</code>\n\n\
-                Введите новый заголовок карточки или отправьте <code>/skip</code>:",
+                Введите новый заголовок, <code>/skip</code> — оставить как есть, <code>/clear</code> — убрать:",
                 ver_id,
                 encode_text(&cur_title)
             ),

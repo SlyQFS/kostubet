@@ -32,7 +32,9 @@ pub async fn handle_edit_message(
 
     match state {
         EditApkState::EditingTitle { mut data } => {
-            if text != "/skip" && !text.is_empty() {
+            if text == "/clear" {
+                data.title = None;
+            } else if text != "/skip" && !text.is_empty() {
                 data.title = Some(text.to_string());
             }
 
@@ -87,7 +89,8 @@ pub async fn handle_edit_message(
             bot.send_message(
                 chat_id,
                 format!(
-                    "📝 <b>Текущий список изменений (Changelog):</b>\n<code>{}</code>\n\nВведите новый список изменений или отправьте <code>/skip</code>:",
+                    "📝 <b>Текущий список изменений (Changelog):</b>\n<code>{}</code>\n\n\
+                    Введите новый список изменений, <code>/skip</code> — оставить как есть, <code>/clear</code> — убрать:",
                     encode_text(&cur_changelog)
                 ),
             )
@@ -95,7 +98,9 @@ pub async fn handle_edit_message(
             .await?;
         }
         EditApkState::EditingChangelog { mut data } => {
-            if text != "/skip" && !text.is_empty() {
+            if text == "/clear" {
+                data.changelog = None;
+            } else if text != "/skip" && !text.is_empty() {
                 data.changelog = Some(text.to_string());
             }
 
@@ -112,7 +117,8 @@ pub async fn handle_edit_message(
             bot.send_message(
                 chat_id,
                 format!(
-                    "🔗 <b>Текущая ссылка на изменения (Diff URL):</b>\n<code>{}</code>\n\nВведите новую ссылку или отправьте <code>/skip</code>:",
+                    "🔗 <b>Текущая ссылка на изменения (Diff URL):</b>\n<code>{}</code>\n\n\
+                    Введите новую ссылку, <code>/skip</code> — оставить как есть, <code>/clear</code> — убрать ссылку из карточки:",
                     encode_text(&cur_diff)
                 ),
             )
@@ -120,7 +126,9 @@ pub async fn handle_edit_message(
             .await?;
         }
         EditApkState::EditingDiffUrl { mut data } => {
-            if text != "/skip" && !text.is_empty() {
+            if text == "/clear" {
+                data.diff_url = None;
+            } else if text != "/skip" && !text.is_empty() {
                 data.diff_url = Some(text.to_string());
             }
 
