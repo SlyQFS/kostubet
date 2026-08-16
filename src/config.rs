@@ -116,6 +116,9 @@ pub struct Config {
     pub check_tags: bool,
     #[serde(default = "default_true")]
     pub check_commits: bool,
+    /// Post pre-releases (beta builds). Set POST_PRERELEASES=false to skip them.
+    #[serde(default = "default_true")]
+    pub post_prereleases: bool,
     #[serde(default)]
     pub dry_run: bool,
 }
@@ -160,6 +163,7 @@ impl Config {
                 check_releases: true,
                 check_tags: true,
                 check_commits: true,
+                post_prereleases: true,
                 dry_run: false,
             }
         };
@@ -237,6 +241,11 @@ impl Config {
         if let Ok(val) = env::var("CHECK_COMMITS") {
             let v = val.to_lowercase();
             config.check_commits = v == "1" || v == "true" || v == "yes";
+        }
+
+        if let Ok(val) = env::var("POST_PRERELEASES") {
+            let v = val.to_lowercase();
+            config.post_prereleases = v == "1" || v == "true" || v == "yes";
         }
 
         if let Ok(tracked_env) = env::var("TRACKED_REPOS") {

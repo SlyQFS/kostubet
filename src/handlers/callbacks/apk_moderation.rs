@@ -124,6 +124,15 @@ pub async fn handle_apk_approve(
         app.name, ver.version, target_chat_id
     );
 
+    let _ = db
+        .audit()
+        .log_action(
+            user_id,
+            "одобрил и опубликовал APK",
+            &format!("{} v{}", app.name, ver.version),
+        )
+        .await;
+
     db.custom_apps()
         .set_app_current_version(app.id, ver_id)
         .await?;
@@ -212,6 +221,15 @@ pub async fn handle_apk_reject(
         }
         return Ok(());
     }
+
+    let _ = db
+        .audit()
+        .log_action(
+            user_id,
+            "отклонил APK",
+            &format!("{} v{}", app.name, ver.version),
+        )
+        .await;
 
     if let Some(msg) = &q.message {
         let _ = bot
@@ -328,22 +346,8 @@ pub async fn handle_apk_edit_publish(
             return Ok(());
         };
 
-        // Update DB version and tags
-        db.custom_apps()
-            .update_version_fields(
-                ver_id,
-                data.title.as_deref(),
-                data.changelog.as_deref(),
-                data.diff_url.as_deref(),
-                data.cover_image_file_id.as_deref(),
-            )
-            .await?;
-
-        db.tags()
-            .set_tags_for_item(ItemType::CustomApp, app.id, &data.tags)
-            .await?;
-
-        // Atomic claim guard (same as the plain approve path)
+        // Atomic claim guard FIRST: an already-processed version must never
+        // have its fields/tags overwritten by a late edit.
         let updated = db
             .custom_apps()
             .set_version_status_if_pending(ver_id, "approved", user_id, None)
@@ -365,6 +369,21 @@ pub async fn handle_apk_edit_publish(
             }
             return Ok(());
         }
+
+        // Update DB version and tags (only after the claim succeeded)
+        db.custom_apps()
+            .update_version_fields(
+                ver_id,
+                data.title.as_deref(),
+                data.changelog.as_deref(),
+                data.diff_url.as_deref(),
+                data.cover_image_file_id.as_deref(),
+            )
+            .await?;
+
+        db.tags()
+            .set_tags_for_item(ItemType::CustomApp, app.id, &data.tags)
+            .await?;
 
         // Publish post
         let apk_files = db.custom_apps().get_apk_files(ver_id).await?;
@@ -430,6 +449,15 @@ pub async fn handle_apk_edit_publish(
         let _ = db
             .custom_apps()
             .set_published_message_id(ver_id, published_msg.id.0 as i64)
+            .await;
+
+        let _ = db
+            .audit()
+            .log_action(
+                user_id,
+                "опубликовал APK (после правки)",
+                &format!("{} v{}", app.name, ver.version),
+            )
             .await;
 
         dialogue.exit().await?;

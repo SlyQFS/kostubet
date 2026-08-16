@@ -4,6 +4,7 @@
 //! automated idempotent migrations.
 
 pub mod admins;
+pub mod audit;
 pub mod custom_apps;
 pub mod suggestions;
 pub mod tags;
@@ -16,6 +17,7 @@ use std::time::Duration;
 use tracing::info;
 
 pub use admins::AdminsRepo;
+pub use audit::AuditRepo;
 pub use custom_apps::CustomAppsRepo;
 pub use suggestions::SuggestionsRepo;
 #[allow(unused_imports)]
@@ -75,6 +77,10 @@ impl Database {
 
     pub fn custom_apps(&self) -> CustomAppsRepo<'_> {
         CustomAppsRepo::new(&self.pool)
+    }
+
+    pub fn audit(&self) -> AuditRepo<'_> {
+        AuditRepo::new(&self.pool)
     }
 
     pub async fn init_schema(&self) -> Result<()> {
@@ -196,6 +202,46 @@ impl Database {
                 .execute(&self.pool)
                 .await;
         }
+
+        // Idempotent check: fail_count column for dead-repo detection
+        let has_fail_count: Option<i64> = sqlx::query_scalar(
+            "SELECT COUNT(1) FROM pragma_table_info('tracked_tools') WHERE name = 'fail_count';",
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .unwrap_or(None);
+
+        if has_fail_count == Some(0) {
+            let _ = sqlx::query("ALTER TABLE tracked_tools ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0;")
+                .execute(&self.pool)
+                .await;
+        }
+
+        // Race-proof dedup of pending suggestions at the DB level
+        // (one pending suggestion per repository).
+        let _ = sqlx::query(
+            r#"
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_suggestions_pending_repo
+            ON suggestions(owner, repo) WHERE status = 'pending';
+            "#,
+        )
+        .execute(&self.pool)
+        .await;
+
+        // Audit trail of administrative actions
+        let _ = sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS admin_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER NOT NULL,
+                action TEXT NOT NULL,
+                target TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await;
 
         // Non-destructive migration from legacy tracked_repos table if present
         let has_legacy_table: Option<String> = sqlx::query_scalar(

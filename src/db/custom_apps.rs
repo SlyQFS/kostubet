@@ -598,4 +598,39 @@ impl<'a> CustomAppsRepo<'a> {
 
         Ok(())
     }
+
+    /// All published Telegram message ids across the app's versions
+    /// (used to remove channel posts when deleting an app).
+    pub async fn get_published_message_ids_for_app(&self, app_id: i64) -> Result<Vec<i64>> {
+        let ids: Vec<i64> = sqlx::query_scalar(
+            r#"
+            SELECT published_message_id FROM custom_app_versions
+            WHERE app_id = ? AND published_message_id IS NOT NULL
+            "#,
+        )
+        .bind(app_id)
+        .fetch_all(self.pool)
+        .await
+        .context("Failed to list published message ids for app")?;
+        Ok(ids)
+    }
+
+    /// Permanently deletes an app with all its versions and APK file records
+    /// (FK cascades) and detaches its tags. Returns false when the app
+    /// did not exist.
+    pub async fn delete_app(&self, app_id: i64) -> Result<bool> {
+        sqlx::query("DELETE FROM item_tags WHERE item_type = 'custom_app' AND item_id = ?")
+            .bind(app_id)
+            .execute(self.pool)
+            .await
+            .context("Failed to detach app tags")?;
+
+        let res = sqlx::query("DELETE FROM custom_apps WHERE id = ?")
+            .bind(app_id)
+            .execute(self.pool)
+            .await
+            .context("Failed to delete custom app")?;
+
+        Ok(res.rows_affected() > 0)
+    }
 }

@@ -1,9 +1,38 @@
+//! GitHub API client with conditional (ETag) requests for release/tag/commit polling.
+
 use crate::services::apk_variant::detect_variant;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, IF_NONE_MATCH, USER_AGENT};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
+use std::sync::atomic::{AtomicI64, AtomicU32, Ordering};
+use std::sync::OnceLock;
+use std::time::Duration;
 use tracing::warn;
+
+const API_BASE: &str = "https://api.github.com";
+/// Hard HTTP timeout: a hung connection must never stall the poller loop.
+const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
+/// How many newest releases to inspect per poll (catches bursts between polls).
+const RELEASES_PAGE_SIZE: usize = 10;
+
+/// Last observed GitHub API quota (for /debug diagnostics).
+pub static RATE_REMAINING: AtomicU32 = AtomicU32::new(u32::MAX);
+pub static RATE_RESET_UNIX: AtomicI64 = AtomicI64::new(0);
+
+static GLOBAL_CLIENT: OnceLock<GithubClient> = OnceLock::new();
+
+/// Initializes the process-wide GitHub client (called once at startup).
+pub fn init_global(token: Option<String>) -> Result<()> {
+    let client = GithubClient::new(token)?;
+    let _ = GLOBAL_CLIENT.set(client);
+    Ok(())
+}
+
+/// Process-wide GitHub client (handlers use it for one-off validation calls).
+pub fn global() -> Option<&'static GithubClient> {
+    GLOBAL_CLIENT.get()
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateType {
@@ -26,23 +55,19 @@ impl std::fmt::Display for UpdateType {
 pub struct ApkAsset {
     pub variant: String,
     pub url: String,
-    #[allow(dead_code)]
-    pub name: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct GithubUpdate {
     pub update_type: UpdateType,
-    pub id: String, // release id, tag name, or commit sha
-    #[allow(dead_code)]
-    pub tag_or_version: String,
+    /// Release id, tag name, or commit sha — persisted as `last_release`.
+    pub id: String,
     pub title: String,
     pub url: String,
     pub body: Option<String>,
-    #[allow(dead_code)]
+    /// ETag of the releases response (only the releases endpoint is
+    /// conditionally polled; tags/commits dedup by id).
     pub etag: Option<String>,
-    #[allow(dead_code)]
-    pub sha: Option<String>,
     pub apk_assets: Vec<ApkAsset>,
 }
 
@@ -51,21 +76,20 @@ pub enum CheckResult {
     NotModified,
     NewUpdate(GithubUpdate),
     NoUpdatesFound,
+    /// The repository no longer exists (404 from every checked endpoint).
+    RepoNotFound,
+    /// GitHub API quota exhausted; `retry_after_secs` until the reset.
+    RateLimited { retry_after_secs: u64 },
 }
 
 pub struct GithubClient {
     client: Client,
-    #[allow(dead_code)]
-    token: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct GhAsset {
     pub name: String,
     pub browser_download_url: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub size: Option<i64>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -75,6 +99,8 @@ struct GhRelease {
     name: Option<String>,
     html_url: String,
     body: Option<String>,
+    #[serde(default)]
+    prerelease: bool,
     #[serde(default)]
     assets: Vec<GhAsset>,
 }
@@ -107,7 +133,7 @@ impl GithubClient {
         let mut headers = HeaderMap::new();
         headers.insert(
             USER_AGENT,
-            HeaderValue::from_static("kostubet-github-bot/0.1.0"),
+            HeaderValue::from_static("kostubet-github-bot/0.2.0"),
         );
         headers.insert(
             ACCEPT,
@@ -123,22 +149,107 @@ impl GithubClient {
 
         let client = Client::builder()
             .default_headers(headers)
+            .timeout(HTTP_TIMEOUT)
             .build()
             .context("Failed to build HTTP client for GitHub API")?;
 
-        Ok(Self { client, token })
+        Ok(Self { client })
     }
 
-    fn check_rate_limit(&self, headers: &HeaderMap) {
-        if let Some(rem_val) = headers.get("x-ratelimit-remaining") {
-            if let Ok(rem_str) = rem_val.to_str() {
-                if let Ok(rem) = rem_str.parse::<u32>() {
-                    if rem < 10 {
-                        warn!("GitHub API rate limit is very low! Remaining: {}", rem);
-                    }
-                }
+    /// Detects an exhausted rate limit from response headers/status and
+    /// returns the seconds to wait until the quota resets.
+    fn rate_limited_for(&self, status: StatusCode, headers: &HeaderMap) -> Option<u64> {
+        let remaining = headers
+            .get("x-ratelimit-remaining")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u32>().ok());
+
+        // Track the observed quota for diagnostics (/debug).
+        if let Some(rem) = remaining {
+            RATE_REMAINING.store(rem, Ordering::Relaxed);
+            if let Some(reset) = headers
+                .get("x-ratelimit-reset")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<i64>().ok())
+            {
+                RATE_RESET_UNIX.store(reset, Ordering::Relaxed);
             }
         }
+
+        let exhausted = remaining == Some(0)
+            || (status == StatusCode::FORBIDDEN && remaining.is_some_and(|r| r < 5));
+        if !exhausted {
+            if let Some(rem) = remaining {
+                if rem < 10 {
+                    warn!("GitHub API rate limit is very low! Remaining: {}", rem);
+                }
+            }
+            return None;
+        }
+
+        let reset = headers
+            .get("x-ratelimit-reset")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<i64>().ok())
+            .unwrap_or(0);
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        Some((reset - now).clamp(60, 3600) as u64)
+    }
+
+    /// One-off existence check used when adding repositories
+    /// (catches typos before they become dead trackers).
+    pub async fn repo_exists(&self, owner: &str, name: &str) -> Result<bool> {
+        let url = format!("{}/repos/{}/{}", API_BASE, owner, name);
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("HTTP GET failed for {}", url))?;
+
+        match resp.status() {
+            StatusCode::OK => Ok(true),
+            StatusCode::NOT_FOUND => Ok(false),
+            s => anyhow::bail!("GitHub returned {} for {}", s, url),
+        }
+    }
+
+    /// Brief info about the current newest release (id + etag), used for
+    /// "silent" tracking setup: the poller skips the already-existing release.
+    pub async fn latest_release_brief(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Result<Option<(String, Option<String>)>> {
+        let url = format!(
+            "{}/repos/{}/{}/releases?per_page=1",
+            API_BASE, owner, name
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .send()
+            .await
+            .with_context(|| format!("HTTP GET failed for {}", url))?;
+
+        if resp.status() != StatusCode::OK {
+            return Ok(None);
+        }
+
+        let etag = resp
+            .headers()
+            .get("etag")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        let releases: Vec<GhRelease> = resp.json().await.context("Failed to parse releases JSON")?;
+        Ok(releases
+            .into_iter()
+            .next()
+            .map(|r| (r.id.to_string(), etag)))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -148,16 +259,24 @@ impl GithubClient {
         name: &str,
         cached_etag: Option<&str>,
         last_seen_id: Option<&str>,
-        last_seen_sha: Option<&str>,
         check_releases: bool,
         check_tags: bool,
         check_commits: bool,
+        include_prereleases: bool,
     ) -> Result<CheckResult> {
-        // 1. Try Releases API (/repos/{owner}/{repo}/releases/latest)
+        // Every endpoint that answered 404 counts; if ALL checked endpoints
+        // are gone, the repository itself no longer exists.
+        let mut endpoints_checked = 0usize;
+        let mut endpoints_404 = 0usize;
+
+        // 1. Releases: poll the LIST endpoint (per_page=N) instead of
+        // /releases/latest — the latter silently skips pre-releases, so
+        // repositories publishing beta builds would never produce updates.
         if check_releases {
+            endpoints_checked += 1;
             let release_url = format!(
-                "https://api.github.com/repos/{}/{}/releases/latest",
-                owner, name
+                "{}/repos/{}/{}/releases?per_page={}",
+                API_BASE, owner, name, RELEASES_PAGE_SIZE
             );
             let mut req = self.client.get(&release_url);
             if let Some(etag) = cached_etag {
@@ -168,7 +287,12 @@ impl GithubClient {
                 .send()
                 .await
                 .with_context(|| format!("HTTP GET failed for {}", release_url))?;
-            self.check_rate_limit(resp.headers());
+
+            if let Some(retry_after) = self.rate_limited_for(resp.status(), resp.headers()) {
+                return Ok(CheckResult::RateLimited {
+                    retry_after_secs: retry_after,
+                });
+            }
 
             if resp.status() == StatusCode::NOT_MODIFIED {
                 return Ok(CheckResult::NotModified);
@@ -180,140 +304,177 @@ impl GithubClient {
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
 
-            if resp.status().is_success() {
-                let release: GhRelease =
-                    resp.json().await.context("Failed to parse release JSON")?;
-                let current_id = release.id.to_string();
+            if resp.status() == StatusCode::NOT_FOUND {
+                // Repo has no releases at all — fall through to tags.
+                endpoints_404 += 1;
+                warn!("No releases found for {}/{} (404), falling back to tags", owner, name);
+            } else if resp.status().is_success() {
+                let mut releases: Vec<GhRelease> = resp
+                    .json()
+                    .await
+                    .context("Failed to parse releases JSON")?;
 
-                if last_seen_id == Some(&current_id) || last_seen_id == Some(&release.tag_name) {
-                    return Ok(CheckResult::NotModified);
+                // Optional pre-release filter (repos flooding with betas).
+                if !include_prereleases {
+                    releases.retain(|r| !r.prerelease);
                 }
 
-                let title = release
-                    .name
-                    .filter(|n| !n.trim().is_empty())
-                    .unwrap_or_else(|| release.tag_name.clone());
+                // The list is sorted newest-first. If the newest entry is the
+                // already-seen one — nothing changed. If a seen release sits
+                // deeper in the list, several releases landed between polls:
+                // post only the newest instead of flooding the chat.
+                if let Some(newest) = releases.first() {
+                    let seen_at = releases.iter().position(|r| {
+                        last_seen_id == Some(r.id.to_string().as_str())
+                            || last_seen_id == Some(r.tag_name.as_str())
+                    });
 
-                // Filter and organize APK assets
-                let all_apk_assets: Vec<GhAsset> = release
-                    .assets
-                    .into_iter()
-                    .filter(|a| a.name.to_lowercase().ends_with(".apk"))
-                    .collect();
+                    if seen_at == Some(0) {
+                        return Ok(CheckResult::NotModified);
+                    }
 
-                let apk_assets: Vec<ApkAsset> = if let Some(universal) = all_apk_assets
-                    .iter()
-                    .find(|a| a.name.to_lowercase().contains("universal"))
-                {
-                    vec![ApkAsset {
-                        variant: "universal".to_string(),
-                        url: universal.browser_download_url.clone(),
-                        name: universal.name.clone(),
-                    }]
-                } else {
-                    all_apk_assets
-                        .into_iter()
-                        .map(|a| {
-                            let variant = detect_variant(&a.name).unwrap_or("apk").to_string();
-                            ApkAsset {
-                                variant,
+                    let title = newest
+                        .name
+                        .clone()
+                        .filter(|n| !n.trim().is_empty())
+                        .unwrap_or_else(|| newest.tag_name.clone());
+                    let title = if newest.prerelease {
+                        format!("{} [pre-release]", title)
+                    } else {
+                        title
+                    };
+
+                    // Filter and organize APK assets
+                    let all_apk_assets: Vec<GhAsset> = newest
+                        .assets
+                        .iter()
+                        .filter(|a| a.name.to_lowercase().ends_with(".apk"))
+                        .cloned()
+                        .collect();
+
+                    let apk_assets: Vec<ApkAsset> = if let Some(universal) = all_apk_assets
+                        .iter()
+                        .find(|a| a.name.to_lowercase().contains("universal"))
+                    {
+                        vec![ApkAsset {
+                            variant: "universal".to_string(),
+                            url: universal.browser_download_url.clone(),
+                        }]
+                    } else {
+                        all_apk_assets
+                            .into_iter()
+                            .map(|a| ApkAsset {
+                                variant: detect_variant(&a.name).unwrap_or("apk").to_string(),
                                 url: a.browser_download_url,
-                                name: a.name,
-                            }
-                        })
-                        .collect()
-                };
+                            })
+                            .collect()
+                    };
 
-                return Ok(CheckResult::NewUpdate(GithubUpdate {
-                    update_type: UpdateType::Release,
-                    id: current_id,
-                    tag_or_version: release.tag_name,
-                    title,
-                    url: release.html_url,
-                    body: release.body,
-                    etag: etag_header,
-                    sha: None,
-                    apk_assets,
-                }));
-            } else if resp.status() != StatusCode::NOT_FOUND {
+                    return Ok(CheckResult::NewUpdate(GithubUpdate {
+                        update_type: UpdateType::Release,
+                        id: newest.id.to_string(),
+                        title,
+                        url: newest.html_url.clone(),
+                        body: newest.body.clone(),
+                        etag: etag_header,
+                        apk_assets,
+                    }));
+                }
+                // Empty release list — fall through to tags.
+            } else {
+                // Transient error (5xx, secondary limits): do NOT fall through
+                // to tags — that could post a false "tag" update for a repo
+                // whose release check simply failed.
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
                 warn!("GitHub releases returned status {}: {}", status, text);
+                return Ok(CheckResult::NoUpdatesFound);
             }
         }
 
-        // 2. Fallback: Try Tags API (/repos/{owner}/{repo}/tags)
+        // 2. Fallback: Tags API (/repos/{owner}/{repo}/tags)
         if check_tags {
-            let tags_url = format!(
-                "https://api.github.com/repos/{}/{}/tags?per_page=1",
-                owner, name
-            );
+            endpoints_checked += 1;
+            let tags_url = format!("{}/repos/{}/{}/tags?per_page=1", API_BASE, owner, name);
             let tags_resp = self
                 .client
                 .get(&tags_url)
                 .send()
                 .await
                 .with_context(|| format!("HTTP GET failed for {}", tags_url))?;
-            self.check_rate_limit(tags_resp.headers());
 
-            if tags_resp.status().is_success() {
+            if let Some(retry_after) =
+                self.rate_limited_for(tags_resp.status(), tags_resp.headers())
+            {
+                return Ok(CheckResult::RateLimited {
+                    retry_after_secs: retry_after,
+                });
+            }
+
+            if tags_resp.status() == StatusCode::NOT_FOUND {
+                endpoints_404 += 1;
+            } else if tags_resp.status().is_success() {
                 let tags: Vec<GhTag> = tags_resp
                     .json()
                     .await
                     .context("Failed to parse tags JSON")?;
                 if let Some(tag) = tags.into_iter().next() {
-                    if last_seen_id == Some(&tag.name) || last_seen_sha == Some(&tag.commit.sha) {
+                    // Cross-kind dedup: releases store their id, commits their sha.
+                    if last_seen_id == Some(&tag.name)
+                        || last_seen_id == Some(&tag.commit.sha)
+                    {
                         return Ok(CheckResult::NotModified);
                     }
 
+                    // tree/{tag} always resolves; releases/tag/{tag} 404s for
+                    // tags that never got a release.
                     let tag_url = format!(
-                        "https://github.com/{}/{}/releases/tag/{}",
+                        "https://github.com/{}/{}/tree/{}",
                         owner, name, tag.name
                     );
                     return Ok(CheckResult::NewUpdate(GithubUpdate {
                         update_type: UpdateType::Tag,
                         id: tag.name.clone(),
-                        tag_or_version: tag.name.clone(),
                         title: format!("Tag {}", tag.name),
                         url: tag_url,
                         body: None,
                         etag: None,
-                        sha: Some(tag.commit.sha),
                         apk_assets: Vec::new(),
                     }));
                 }
             }
         }
 
-        // 3. Fallback: Try Commits API (/repos/{owner}/{repo}/commits)
+        // 3. Fallback: Commits API (/repos/{owner}/{repo}/commits)
         if check_commits {
-            let commits_url = format!(
-                "https://api.github.com/repos/{}/{}/commits?per_page=1",
-                owner, name
-            );
+            endpoints_checked += 1;
+            let commits_url = format!("{}/repos/{}/{}/commits?per_page=1", API_BASE, owner, name);
             let commits_resp = self
                 .client
                 .get(&commits_url)
                 .send()
                 .await
                 .with_context(|| format!("HTTP GET failed for {}", commits_url))?;
-            self.check_rate_limit(commits_resp.headers());
 
-            if commits_resp.status().is_success() {
+            if let Some(retry_after) =
+                self.rate_limited_for(commits_resp.status(), commits_resp.headers())
+            {
+                return Ok(CheckResult::RateLimited {
+                    retry_after_secs: retry_after,
+                });
+            }
+
+            if commits_resp.status() == StatusCode::NOT_FOUND {
+                endpoints_404 += 1;
+            } else if commits_resp.status().is_success() {
                 let commits: Vec<GhCommit> = commits_resp
                     .json()
                     .await
                     .context("Failed to parse commits JSON")?;
                 if let Some(commit) = commits.into_iter().next() {
-                    if last_seen_sha == Some(&commit.sha) || last_seen_id == Some(&commit.sha) {
+                    if last_seen_id == Some(&commit.sha) {
                         return Ok(CheckResult::NotModified);
                     }
-
-                    let short_sha = if commit.sha.len() >= 7 {
-                        &commit.sha[..7]
-                    } else {
-                        &commit.sha
-                    };
 
                     let first_line = commit
                         .commit
@@ -326,16 +487,19 @@ impl GithubClient {
                     return Ok(CheckResult::NewUpdate(GithubUpdate {
                         update_type: UpdateType::Commit,
                         id: commit.sha.clone(),
-                        tag_or_version: short_sha.to_string(),
                         title: first_line,
                         url: commit.html_url,
                         body: Some(commit.commit.message),
                         etag: None,
-                        sha: Some(commit.sha),
                         apk_assets: Vec::new(),
                     }));
                 }
             }
+        }
+
+        // All checked endpoints 404 -> repository deleted/renamed.
+        if endpoints_checked > 0 && endpoints_404 == endpoints_checked {
+            return Ok(CheckResult::RepoNotFound);
         }
 
         Ok(CheckResult::NoUpdatesFound)

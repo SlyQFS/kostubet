@@ -89,8 +89,15 @@ pub enum EditApkState {
 pub enum AdminState {
     /// Waiting for `owner/repo` or a GitHub URL of a repository to track.
     RepoLink,
+    /// Parsed repo: choosing whether to post the current release immediately
+    /// or track silently (buttons `adm:trackmode:*`).
+    RepoMode { owner: String, name: String },
     /// Waiting for space-separated tags for the parsed repo (or `/done`).
-    RepoTags { owner: String, name: String },
+    RepoTags {
+        owner: String,
+        name: String,
+        silent: bool,
+    },
     /// Waiting for a new global tag name.
     NewTag,
     /// Waiting for a tag name that is also attached to an item ("tool"/"custom_app").

@@ -65,8 +65,6 @@ pub enum Command {
     Submitapk,
     #[command(description = "Список опубликованных кастомных приложений.")]
     Apps,
-    #[command(description = "Получить APK приложения. Использование: /getapk <slug>")]
-    Getapk(String),
 }
 
 #[tracing::instrument(skip(bot, dialogue, db))]
@@ -130,7 +128,6 @@ pub async fn handle_command(
         Command::Mysuggestions => commands_public::handle_mysuggestions(&bot, &msg, &db).await,
         Command::Submitapk => commands_public::handle_submitapk(&bot, &msg, &dialogue, &db).await,
         Command::Apps => commands_public::handle_apps(&bot, &msg, &db).await,
-        Command::Getapk(args) => commands_public::handle_getapk(&bot, &msg, &args, &db).await,
     };
 
     if let Err(e) = res {

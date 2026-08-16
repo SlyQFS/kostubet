@@ -107,6 +107,12 @@ async fn main() -> Result<()> {
     let bot = Bot::new(&config.telegram_bot_token);
     let storage = SqliteDialogueStorage::new(db.pool().clone());
 
+    // Process-wide GitHub client for one-off validation calls
+    // (repo existence checks on /track, suggestion approval, admin dialogues).
+    if let Err(e) = crate::services::github::init_global(config.github_token.clone()) {
+        error!("Не удалось инициализировать глобальный GitHub-клиент: {:?}", e);
+    }
+
     // Register bot commands with Telegram UI autocomplete
     if let Err(e) = bot.set_my_commands(Command::bot_commands()).await {
         error!(

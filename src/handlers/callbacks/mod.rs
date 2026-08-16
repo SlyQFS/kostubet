@@ -234,7 +234,8 @@ pub async fn handle_callback(
 
     // 4. Admin Panel (adm:*) and public catalog (pub:apps:* / appcard:*)
     if let Some(rest) = data.strip_prefix("adm:") {
-        return panel::handle_panel_callback(&bot, &q, rest, &dialogue, &db, user_id).await;
+        return panel::handle_panel_callback(&bot, &q, rest, &dialogue, &db, user_id, target_chat_id)
+            .await;
     }
 
     if let Some(p) = data.strip_prefix("pub:apps:") {

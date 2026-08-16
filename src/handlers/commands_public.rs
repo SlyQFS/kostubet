@@ -1,14 +1,12 @@
 //! Public user commands and interactive start onboarding.
 //!
 //! Handles `/start`, `/help`, `/admin` overview, repository suggestions (`/suggest`),
-//! user submission status (`/mysuggestions`), APK catalog (`/apps`), and downloading (`/getapk`).
+//! user submission status (`/mysuggestions`), and the APK catalog (`/apps`).
 
 use crate::config::RepoConfig;
-use crate::db::tags::ItemType;
 use crate::db::Database;
 use crate::dialogue::state::{DialogueState, SubmitApkState, SuggestData, SuggestState};
 use crate::dialogue::BotDialogue;
-use crate::services::render::{build_apk_post_data, render_post_keyboard, render_post_text};
 use crate::strings::ACCESS_DENIED;
 use anyhow::Result;
 use html_escape::encode_text;
@@ -56,7 +54,6 @@ pub async fn send_help(bot: &Bot, chat_id: ChatId, sender_id: i64, db: &Database
         • <code>/mysuggestions</code> — Статус ваших предложенных заявок\n\
         • <code>/submitapk</code> — Загрузить новое приложение / обновление APK\n\
         • <code>/apps</code> — Список опубликованных кастомных приложений\n\
-        • <code>/getapk &lt;slug&gt;</code> — Получить APK приложения\n\
         • <code>/cancel</code> — Отменить текущий диалог\n\
         • <code>/help</code> — Эта справка\n"
         .to_string();
@@ -333,88 +330,4 @@ pub async fn handle_apps(bot: &Bot, msg: &Message, db: &Database) -> Result<()> 
 
 pub async fn send_apps_list(bot: &Bot, chat_id: ChatId, db: &Database) -> Result<()> {
     crate::handlers::callbacks::panel::send_apps_page(bot, chat_id, db).await
-}
-
-pub async fn handle_getapk(bot: &Bot, msg: &Message, args: &str, db: &Database) -> Result<()> {
-    let chat_id = msg.chat.id;
-    let slug = args.trim();
-
-    if slug.is_empty() {
-        bot.send_message(
-            chat_id,
-            "❌ Укажите идентификатор приложения! Например:\n<code>/getapk v2rayng</code>\n\nСписок доступных приложений: <code>/apps</code>",
-        )
-        .parse_mode(ParseMode::Html)
-        .await?;
-        return Ok(());
-    }
-
-    let app = match db.custom_apps().get_app_by_slug(slug).await? {
-        Some(a) => a,
-        None => {
-            bot.send_message(
-                chat_id,
-                format!("❌ Приложение с идентификатором <code>{}</code> не найдено.\nСписок: <code>/apps</code>", encode_text(slug)),
-            )
-            .parse_mode(ParseMode::Html)
-            .await?;
-            return Ok(());
-        }
-    };
-
-    let ver = match db.custom_apps().get_current_version(app.id).await? {
-        Some(v) => v,
-        None => {
-            bot.send_message(
-                chat_id,
-                "⚠️ Для этого приложения пока нет одобренных версий.",
-            )
-            .await?;
-            return Ok(());
-        }
-    };
-
-    let apk_files = db.custom_apps().get_apk_files(ver.id).await?;
-    if apk_files.is_empty() {
-        bot.send_message(chat_id, "⚠️ Файлы для скачивания не найдены.")
-            .await?;
-        return Ok(());
-    }
-
-    let apk_tuples: Vec<(i64, String)> = apk_files
-        .into_iter()
-        .map(|f| (f.id, f.variant_label))
-        .collect();
-
-    let tags = db
-        .tags()
-        .get_tags_for_item(ItemType::CustomApp, app.id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|t| t.name)
-        .collect();
-
-    let post = build_apk_post_data(
-        &app.name,
-        &ver.version,
-        ver.changelog.clone(),
-        ver.diff_url.clone(),
-        ver.cover_image_file_id.clone(),
-        tags,
-        &apk_tuples,
-    );
-
-    let text = render_post_text(&post);
-    let kb = render_post_keyboard(&post);
-
-    let mut req = bot.send_message(chat_id, text).parse_mode(ParseMode::Html);
-
-    if let Some(keyboard) = kb {
-        req = req.reply_markup(keyboard);
-    }
-
-    req.await?;
-
-    Ok(())
 }

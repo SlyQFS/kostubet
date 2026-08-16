@@ -13,6 +13,8 @@ pub struct TrackedToolRecord {
     pub repo: String,
     pub last_release: Option<String>,
     pub etag: Option<String>,
+    /// Consecutive "repository not found" polls (dead-repo detection).
+    pub fail_count: i64,
     #[allow(dead_code)]
     pub added_by: i64,
     #[allow(dead_code)]
@@ -22,6 +24,19 @@ pub struct TrackedToolRecord {
 impl TrackedToolRecord {
     pub fn full_name(&self) -> String {
         format!("{}/{}", self.owner, self.repo)
+    }
+
+    fn from_row(r: &sqlx::sqlite::SqliteRow) -> Self {
+        Self {
+            id: r.get("id"),
+            owner: r.get("owner"),
+            repo: r.get("repo"),
+            last_release: r.get("last_release"),
+            etag: r.get("etag"),
+            fail_count: r.get::<i64, _>("fail_count"),
+            added_by: r.get("added_by"),
+            added_at: r.get("added_at"),
+        }
     }
 }
 
@@ -79,7 +94,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool(&self, owner: &str, repo: &str) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, added_by, added_at
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at
             FROM tracked_tools
             WHERE owner = ? AND repo = ?
             "#,
@@ -90,21 +105,13 @@ impl<'a> ToolsRepo<'a> {
         .await
         .context("Failed to query tracked tool")?;
 
-        Ok(row.map(|r| TrackedToolRecord {
-            id: r.get("id"),
-            owner: r.get("owner"),
-            repo: r.get("repo"),
-            last_release: r.get("last_release"),
-            etag: r.get("etag"),
-            added_by: r.get("added_by"),
-            added_at: r.get("added_at"),
-        }))
+        Ok(row.map(|r| TrackedToolRecord::from_row(&r)))
     }
 
     pub async fn get_tool_by_id(&self, id: i64) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, added_by, added_at
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at
             FROM tracked_tools
             WHERE id = ?
             "#,
@@ -114,21 +121,13 @@ impl<'a> ToolsRepo<'a> {
         .await
         .context("Failed to query tracked tool by id")?;
 
-        Ok(row.map(|r| TrackedToolRecord {
-            id: r.get("id"),
-            owner: r.get("owner"),
-            repo: r.get("repo"),
-            last_release: r.get("last_release"),
-            etag: r.get("etag"),
-            added_by: r.get("added_by"),
-            added_at: r.get("added_at"),
-        }))
+        Ok(row.map(|r| TrackedToolRecord::from_row(&r)))
     }
 
     pub async fn list_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, added_by, added_at
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at
             FROM tracked_tools
             ORDER BY owner ASC, repo ASC
             "#,
@@ -137,18 +136,7 @@ impl<'a> ToolsRepo<'a> {
         .await
         .context("Failed to list tracked tools")?;
 
-        Ok(rows
-            .into_iter()
-            .map(|r| TrackedToolRecord {
-                id: r.get("id"),
-                owner: r.get("owner"),
-                repo: r.get("repo"),
-                last_release: r.get("last_release"),
-                etag: r.get("etag"),
-                added_by: r.get("added_by"),
-                added_at: r.get("added_at"),
-            })
-            .collect())
+        Ok(rows.into_iter().map(|r| TrackedToolRecord::from_row(&r)).collect())
     }
 
     pub async fn update_last_release_and_etag(
@@ -160,7 +148,7 @@ impl<'a> ToolsRepo<'a> {
         sqlx::query(
             r#"
             UPDATE tracked_tools
-            SET last_release = ?, etag = ?
+            SET last_release = ?, etag = ?, fail_count = 0
             WHERE id = ?
             "#,
         )
@@ -172,5 +160,49 @@ impl<'a> ToolsRepo<'a> {
         .context("Failed to update last_release and etag")?;
 
         Ok(())
+    }
+
+    /// Increments the consecutive-404 counter. Returns the new value.
+    pub async fn bump_tool_failures(&self, id: i64) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            UPDATE tracked_tools
+            SET fail_count = fail_count + 1
+            WHERE id = ?
+            RETURNING fail_count
+            "#,
+        )
+        .bind(id)
+        .fetch_one(self.pool)
+        .await
+        .context("Failed to bump tool failure counter")?;
+        Ok(count)
+    }
+
+    /// Resets the consecutive-404 counter after a successful check.
+    pub async fn reset_tool_failures(&self, id: i64) -> Result<()> {
+        sqlx::query("UPDATE tracked_tools SET fail_count = 0 WHERE id = ? AND fail_count > 0")
+            .bind(id)
+            .execute(self.pool)
+            .await
+            .context("Failed to reset tool failure counter")?;
+        Ok(())
+    }
+
+    /// Repositories with recent not-found failures (for /debug diagnostics).
+    pub async fn list_failing_tools(&self) -> Result<Vec<TrackedToolRecord>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at
+            FROM tracked_tools
+            WHERE fail_count > 0
+            ORDER BY fail_count DESC, owner ASC
+            "#,
+        )
+        .fetch_all(self.pool)
+        .await
+        .context("Failed to list failing tools")?;
+
+        Ok(rows.into_iter().map(|r| TrackedToolRecord::from_row(&r)).collect())
     }
 }

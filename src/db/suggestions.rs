@@ -198,6 +198,23 @@ impl<'a> SuggestionsRepo<'a> {
             .collect())
     }
 
+    /// Rolls an approved/rejected suggestion back to `pending` (used when
+    /// post-claim steps fail so the request returns to the queue).
+    pub async fn reset_suggestion_to_pending(&self, id: i64) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE suggestions
+            SET status = 'pending', reviewed_by = NULL, reviewed_at = NULL
+            WHERE id = ?
+            "#,
+        )
+        .bind(id)
+        .execute(self.pool)
+        .await
+        .context("Failed to reset suggestion to pending")?;
+        Ok(())
+    }
+
     pub async fn set_suggestion_status_if_pending(
         &self,
         id: i64,

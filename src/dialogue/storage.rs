@@ -103,10 +103,24 @@ where
                     .map_err(StorageError)?;
 
             match row {
-                Some(json_str) => {
-                    let val: D = serde_json::from_str(&json_str).unwrap_or_default();
-                    Ok(Some(val))
-                }
+                Some(json_str) => match serde_json::from_str::<D>(&json_str) {
+                    Ok(val) => Ok(Some(val)),
+                    Err(e) => {
+                        // Corrupt/incompatible state must not vanish silently:
+                        // log it loudly and drop the broken row so the user
+                        // can start a fresh dialogue.
+                        tracing::error!(
+                            "Corrupt dialogue state for chat {}: {:?}. Resetting to default.",
+                            chat_id.0,
+                            e
+                        );
+                        let _ = sqlx::query("DELETE FROM dialogue_state WHERE chat_id = ?")
+                            .bind(chat_id.0)
+                            .execute(&self.pool)
+                            .await;
+                        Ok(Some(D::default()))
+                    }
+                },
                 None => Ok(None),
             }
         })

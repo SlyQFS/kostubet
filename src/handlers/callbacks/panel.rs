@@ -13,7 +13,9 @@ use crate::strings::ACCESS_DENIED;
 use anyhow::Result;
 use html_escape::encode_text;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
+use teloxide::types::{
+    ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode,
+};
 
 pub const REPOS_PAGE_SIZE: usize = 8;
 pub const TAGS_PAGE_SIZE: usize = 10;
@@ -130,9 +132,10 @@ async fn root_view(db: &Database) -> Result<(String, InlineKeyboardMarkup)> {
                 format!("📥 Заявки ({})", pending_repo + pending_apk),
                 "adm:pending:0",
             ),
-            btn("👥 Админы", "adm:admins"),
+            btn("📱 Приложения", "adm:apps:0"),
         ],
-        vec![btn("🔁 Обновить", "adm:root")],
+        vec![btn("👥 Админы", "adm:admins"), btn("🔁 Обновить", "adm:root")],
+        vec![btn("📜 Журнал действий", "adm:audit:0")],
     ]);
 
     Ok((text, kb))
@@ -549,9 +552,113 @@ pub async fn apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
     Ok((text, InlineKeyboardMarkup::new(rows)))
 }
 
+/// Admin view of published custom apps with deletion controls.
+async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, InlineKeyboardMarkup)> {
+    let apps = db.custom_apps().list_approved_apps().await?;
+    let pages = total_pages(apps.len(), APPS_PAGE_SIZE);
+    let page = page.min(pages - 1);
+    let chunk = &apps[page * APPS_PAGE_SIZE..(page * APPS_PAGE_SIZE + APPS_PAGE_SIZE).min(apps.len())];
+
+    let mut text = format!(
+        "📱 <b>Опубликованные приложения</b> ({}, стр. {}/{})\n\nℹ️ Нажмите на приложение, чтобы удалить его.",
+        apps.len(),
+        page + 1,
+        pages
+    );
+    if apps.is_empty() {
+        text = "📱 <b>Опубликованные приложения</b>\n\n📭 Пока нет опубликованных приложений.".to_string();
+    }
+
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    for app in chunk {
+        let ver_str = db
+            .custom_apps()
+            .get_current_version(app.id)
+            .await
+            .ok()
+            .flatten()
+            .map(|v| format!(" (v{})", encode_text(&v.version)))
+            .unwrap_or_default();
+        text.push_str(&format!("\n• <b>{}</b>{}", encode_text(&app.name), ver_str));
+        rows.push(vec![btn(
+            format!("🗑 {}{}", app.name, ver_str),
+            format!("adm:appdel:{}", app.id),
+        )]);
+    }
+
+    rows.extend(nav_row("adm:apps", page, pages));
+    rows.push(vec![btn("⬅️ В панель", "adm:root")]);
+
+    Ok((text, InlineKeyboardMarkup::new(rows)))
+}
+
+async fn app_delete_confirm_view(
+    db: &Database,
+    app_id: i64,
+) -> Result<(String, InlineKeyboardMarkup)> {
+    let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+        return Ok((
+            "⚠️ Приложение не найдено.".to_string(),
+            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ К приложениям", "adm:apps:0")]]),
+        ));
+    };
+
+    let text = format!(
+        "🗑 Удалить приложение <b>{}</b> (<code>{}</code>)?\n\n\
+        Будут удалены: все его версии, файлы APK, теги и карточки из супергруппы.\n\
+        Это действие необратимо.",
+        encode_text(&app.name),
+        encode_text(&app.slug)
+    );
+
+    let kb = InlineKeyboardMarkup::new(vec![vec![
+        btn("✅ Да, удалить", format!("adm:appdelok:{}", app.id)),
+        btn("❌ Отмена", "adm:apps:0"),
+    ]]);
+
+    Ok((text, kb))
+}
+
 // ---------------------------------------------------------------------------
 // Command entry points (send a fresh page-0 message)
 // ---------------------------------------------------------------------------
+
+/// Paginated audit trail of administrative actions.
+async fn audit_page_view(db: &Database, page: usize) -> Result<(String, InlineKeyboardMarkup)> {
+    const PER_PAGE: i64 = 8;
+    let total = db.audit().count_actions().await.unwrap_or(0) as usize;
+    let pages = total_pages(total, PER_PAGE as usize);
+    let page = page.min(pages - 1);
+
+    let actions = db
+        .audit()
+        .recent_actions(PER_PAGE, (page as i64) * PER_PAGE)
+        .await
+        .unwrap_or_default();
+
+    let mut text = format!(
+        "📜 <b>Журнал действий администраторов</b> ({}, стр. {}/{})",
+        total, page + 1, pages
+    );
+    if actions.is_empty() {
+        text.push_str("\n\n📭 Пока нет записей.");
+    }
+    for a in actions {
+        text.push_str(&format!(
+            "\n\n• <code>[{}]</code> <b>{}</b> — {} {}\n  👤 <code>{}</code>",
+            a.created_at,
+            encode_text(&a.action),
+            encode_text(&a.target),
+            "",
+            a.admin_id
+        ));
+    }
+
+    let mut rows = nav_row("adm:audit", page, pages);
+    rows.push(vec![btn("⬅️ В панель", "adm:root")]);
+
+    Ok((text, InlineKeyboardMarkup::new(rows)))
+}
 
 pub async fn send_root_panel(bot: &Bot, chat_id: ChatId, db: &Database) -> Result<()> {
     let (text, kb) = root_view(db).await?;
@@ -594,6 +701,7 @@ pub async fn handle_panel_callback(
     dialogue: &BotDialogue,
     db: &Database,
     user_id: i64,
+    target_chat_id: i64,
 ) -> Result<()> {
     if rest == "noop" {
         return Ok(());
@@ -638,6 +746,47 @@ pub async fn handle_panel_callback(
         return Ok(());
     }
 
+    // Track mode choice after a repo link was parsed (post current release / silent).
+    if let Some(mode) = rest.strip_prefix("trackmode:") {
+        let cur_state = dialogue.get().await?;
+        let Some(DialogueState::Admin(state)) = cur_state else {
+            return Ok(());
+        };
+        let AdminState::RepoMode { owner, name } = *state else {
+            return Ok(());
+        };
+
+        let silent = mode == "silent";
+        dialogue
+            .update(DialogueState::Admin(Box::new(AdminState::RepoTags {
+                owner,
+                name,
+                silent,
+            })))
+            .await?;
+
+        if let Some(msg) = &q.message {
+            let mode_note = if silent {
+                "🔇 Текущий релиз будет пропущен."
+            } else {
+                "📣 Текущий релиз будет опубликован при первом опросе."
+            };
+            let _ = bot
+                .edit_message_text(
+                    msg.chat().id,
+                    msg.id(),
+                    format!(
+                        "🏷 Введите теги для репозитория через пробел (например: <code>rust network</code>)\n\
+                        или отправьте <code>/done</code>, чтобы добавить без тегов.\n\n{}",
+                        mode_note
+                    ),
+                )
+                .parse_mode(ParseMode::Html)
+                .await;
+        }
+        return Ok(());
+    }
+
     if let Some(id_str) = rest.strip_prefix("repo:") {
         let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
         let (text, kb) = repo_detail_view(db, tool_id).await?;
@@ -654,6 +803,10 @@ pub async fn handle_panel_callback(
         let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
         if let Some(tool) = db.tools().get_tool_by_id(tool_id).await? {
             let _ = db.tools().remove_tool(&tool.owner, &tool.repo).await?;
+            let _ = db
+                .audit()
+                .log_action(user_id, "удалил репозиторий", &tool.full_name())
+                .await;
         }
         let (text, kb) = repos_page_view(db, 0).await?;
         return edit_or_send(bot, q, text, kb).await;
@@ -735,7 +888,20 @@ pub async fn handle_panel_callback(
 
     if let Some(id_str) = rest.strip_prefix("tagdelok:") {
         let Some(tag_id) = parse_id(id_str) else { return Ok(()) };
+        let tag_name = db
+            .tags()
+            .list_tags()
+            .await
+            .ok()
+            .and_then(|tags| tags.into_iter().find(|t| t.id == tag_id))
+            .map(|t| t.name);
         let _ = db.tags().remove_tag_by_id(tag_id).await?;
+        if let Some(name) = tag_name {
+            let _ = db
+                .audit()
+                .log_action(user_id, "удалил тег", &format!("#{}", name))
+                .await;
+        }
         let (text, kb) = tags_page_view(db, 0).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
@@ -744,6 +910,77 @@ pub async fn handle_panel_callback(
     if let Some(p) = rest.strip_prefix("pending:") {
         let page = p.parse::<usize>().unwrap_or(0);
         let (text, kb) = pending_page_view(db, page).await?;
+        return edit_or_send(bot, q, text, kb).await;
+    }
+
+    // Published apps management (deletion)
+    if let Some(p) = rest.strip_prefix("apps:") {
+        let page = p.parse::<usize>().unwrap_or(0);
+        let (text, kb) = adm_apps_page_view(db, page).await?;
+        return edit_or_send(bot, q, text, kb).await;
+    }
+
+    if let Some(id_str) = rest.strip_prefix("appdel:") {
+        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let (text, kb) = app_delete_confirm_view(db, app_id).await?;
+        return edit_or_send(bot, q, text, kb).await;
+    }
+
+    if let Some(id_str) = rest.strip_prefix("appdelok:") {
+        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+
+        // Remove the published channel/group posts first (best-effort).
+        let mut removed_posts = 0usize;
+        if target_chat_id != 0 {
+            for msg_id in db
+                .custom_apps()
+                .get_published_message_ids_for_app(app_id)
+                .await
+                .unwrap_or_default()
+            {
+                if bot
+                    .delete_message(ChatId(target_chat_id), MessageId(msg_id as i32))
+                    .await
+                    .is_ok()
+                {
+                    removed_posts += 1;
+                }
+            }
+        }
+
+        let app_name = db
+            .custom_apps()
+            .get_app_by_id(app_id)
+            .await
+            .ok()
+            .flatten()
+            .map(|a| a.name);
+        let deleted = db.custom_apps().delete_app(app_id).await.unwrap_or(false);
+        if deleted {
+            let _ = db
+                .audit()
+                .log_action(
+                    user_id,
+                    "удалил приложение",
+                    &format!("{} (постов удалено: {})", app_name.unwrap_or_default(), removed_posts),
+                )
+                .await;
+        }
+
+        let (mut text, kb) = adm_apps_page_view(db, 0).await?;
+        if deleted {
+            text = format!(
+                "✅ Приложение удалено. Карточек удалено из супергруппы: {}.\n\n{}",
+                removed_posts, text
+            );
+        }
+        return edit_or_send(bot, q, text, kb).await;
+    }
+
+    // Audit trail
+    if let Some(p) = rest.strip_prefix("audit:") {
+        let page = p.parse::<usize>().unwrap_or(0);
+        let (text, kb) = audit_page_view(db, page).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
@@ -808,7 +1045,7 @@ pub async fn handle_apps_page_callback(
     edit_or_send(bot, q, text, kb).await
 }
 
-/// Public: renders a full app card (like `/getapk`) as a new message.
+/// Public: renders a full app card as a new message (opened from `/apps`).
 pub async fn handle_appcard_callback(
     bot: &Bot,
     q: &CallbackQuery,

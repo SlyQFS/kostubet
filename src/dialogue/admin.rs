@@ -1,8 +1,8 @@
 //! Admin dialogue for button-driven management flows.
 //!
 //! Handles text input steps started from the admin panel inline keyboards:
-//! adding a tracked repository (link -> optional tags), and creating tags
-//! (globally or attached to a specific item).
+//! adding a tracked repository (link -> mode -> optional tags), and creating
+//! tags (globally or attached to a specific item).
 
 use crate::config::RepoConfig;
 use crate::db::tags::ItemType;
@@ -12,7 +12,7 @@ use crate::dialogue::BotDialogue;
 use anyhow::Result;
 use std::str::FromStr;
 use teloxide::prelude::*;
-use teloxide::types::ParseMode;
+use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
 pub async fn handle_admin_message(
     bot: Bot,
@@ -37,7 +37,7 @@ pub async fn handle_admin_message(
 
     match state {
         AdminState::RepoLink => {
-            let Some(repo) = RepoConfig::parse(&text) else {
+            let Some(repo) = RepoConfig::parse_ref(&text) else {
                 bot.send_message(
                     chat_id,
                     "❌ Не удалось распознать репозиторий. Отправьте ссылку вида:\n\
@@ -64,26 +64,84 @@ pub async fn handle_admin_message(
                 return Ok(());
             }
 
+            // Existence check: a typo must not create a dead 404-ing tracker.
+            if let Some(client) = crate::services::github::global() {
+                match client.repo_exists(&repo.owner, &repo.name).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        bot.send_message(
+                            chat_id,
+                            format!(
+                                "❌ Репозиторий <b>{}</b> не найден на GitHub (404). Проверьте написание.",
+                                repo.full_name()
+                            ),
+                        )
+                        .parse_mode(ParseMode::Html)
+                        .await?;
+                        dialogue.exit().await?;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        // GitHub unreachable: let the admin decide whether to proceed.
+                        bot.send_message(
+                            chat_id,
+                            format!(
+                                "⚠️ Не удалось проверить существование репозитория ({}).\nПродолжаю добавление.",
+                                e
+                            ),
+                        )
+                        .await?;
+                    }
+                }
+            }
+
+            let repo_label = repo.full_name();
             dialogue
-                .update(DialogueState::Admin(Box::new(AdminState::RepoTags {
-                    owner: repo.owner.clone(),
-                    name: repo.name.clone(),
+                .update(DialogueState::Admin(Box::new(AdminState::RepoMode {
+                    owner: repo.owner,
+                    name: repo.name,
                 })))
                 .await?;
 
             bot.send_message(
                 chat_id,
                 format!(
-                    "🏷 Введите теги для <b>{}</b> через пробел (например: <code>rust network</code>)\n\
-                    или отправьте <code>/done</code>, чтобы добавить без тегов.",
-                    repo.full_name()
+                    "📦 Репозиторий <b>{}</b> найден.\n\nЧто сделать с его текущим релизом?",
+                    repo_label
                 ),
+            )
+            .parse_mode(ParseMode::Html)
+            .reply_markup(InlineKeyboardMarkup::new(vec![
+                vec![InlineKeyboardButton::callback(
+                    "📣 Запостить текущий релиз",
+                    "adm:trackmode:post",
+                )],
+                vec![InlineKeyboardButton::callback(
+                    "🔇 Пропустить текущий релиз",
+                    "adm:trackmode:silent",
+                )],
+                vec![InlineKeyboardButton::callback(
+                    "❌ Отмена",
+                    "submit_confirm:cancel",
+                )],
+            ]))
+            .await?;
+        }
+
+        AdminState::RepoMode { .. } => {
+            bot.send_message(
+                chat_id,
+                "ℹ️ Выберите действие кнопкой выше или отправьте <code>/cancel</code>.",
             )
             .parse_mode(ParseMode::Html)
             .await?;
         }
 
-        AdminState::RepoTags { owner, name } => {
+        AdminState::RepoTags {
+            owner,
+            name,
+            silent,
+        } => {
             let tags: Vec<String> = if text == "/done" || text == "/skip" {
                 Vec::new()
             } else {
@@ -101,6 +159,29 @@ pub async fn handle_admin_message(
                     .await;
             }
 
+            // Silent mode: mark the current latest release as already seen so
+            // the first poll does not post it.
+            let mut silent_note = String::new();
+            if silent {
+                if let Some(client) = crate::services::github::global() {
+                    if let Ok(Some((release_id, etag))) =
+                        client.latest_release_brief(&owner, &name).await
+                    {
+                        let _ = db
+                            .tools()
+                            .update_last_release_and_etag(
+                                tool_id,
+                                Some(&release_id),
+                                etag.as_deref(),
+                            )
+                            .await;
+                        silent_note =
+                            "\n🔇 Текущий релиз пропущен — будут публиковаться только новые."
+                                .to_string();
+                    }
+                }
+            }
+
             let tags_str = if tags.is_empty() {
                 "без тегов".to_string()
             } else {
@@ -110,13 +191,18 @@ pub async fn handle_admin_message(
                     .join(" ")
             };
 
+            let _ = db
+                .audit()
+                .log_action(sender_id, "добавил репозиторий", &format!("{}/{}", owner, name))
+                .await;
+
             dialogue.exit().await?;
 
             bot.send_message(
                 chat_id,
                 format!(
-                    "✅ Репозиторий <b>{}/{}</b> добавлен в отслеживание!\nТеги: <code>{}</code>",
-                    owner, name, tags_str
+                    "✅ Репозиторий <b>{}/{}</b> добавлен в отслеживание!\nТеги: <code>{}</code>{}",
+                    owner, name, tags_str, silent_note
                 ),
             )
             .parse_mode(ParseMode::Html)
