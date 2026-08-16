@@ -1,37 +1,38 @@
 # Stage 1: Build static binary
-FROM rust:1.80-alpine as builder
+FROM rust:alpine AS builder
 
-# Install build dependencies
+# musl-dev/build-base: C toolchain for the bundled SQLite (libsqlite3-sys);
+# openssl is NOT needed: both reqwest and sqlx use rustls.
 RUN apk add --no-cache \
     musl-dev \
-    build-base \
-    openssl-dev \
-    sqlite-dev \
-    ca-certificates
+    build-base
 
 WORKDIR /usr/src/kostubet-github
 
-COPY Cargo.toml ./
+# Dependency caching layer: build a dummy binary first so that `src/` changes
+# do not invalidate the compiled dependency cache (~10 min -> seconds).
+COPY Cargo.toml Cargo.lock ./
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN cargo build --release --locked && rm -rf src
+# Remove the dummy binary fingerprint so cargo rebuilds the real binary below.
+RUN rm target/release/deps/kostubet_github* target/release/kostubet-github
+
 COPY src ./src
+RUN touch src/main.rs && cargo build --release --locked
 
-# Build highly optimized release binary
-RUN cargo build --release
-
-# Stage 2: Lightweight runtime image (~20MB)
+# Stage 2: Lightweight runtime image
 FROM alpine:3.20
 
 RUN apk add --no-cache \
     ca-certificates \
-    sqlite-libs \
     tzdata \
     libgcc
 
-WORKDIR /app
+WORKDIR /data
 
-# Copy binary from builder
-COPY --from=builder /usr/src/kostubet-github/target/release/kostubet-github /app/kostubet-github
+COPY --from=builder /usr/src/kostubet-github/target/release/kostubet-github /usr/local/bin/kostubet-github
 
-# Default logging filter
 ENV RUST_LOG="kostubet_github=info,teloxide=info"
+ENV DB_PATH="/data/kostubet.db"
 
-ENTRYPOINT ["/app/kostubet-github"]
+ENTRYPOINT ["/usr/local/bin/kostubet-github"]

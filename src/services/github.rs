@@ -1,3 +1,4 @@
+use crate::services::apk_variant::detect_variant;
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, IF_NONE_MATCH, USER_AGENT};
 use reqwest::{Client, StatusCode};
@@ -22,15 +23,27 @@ impl std::fmt::Display for UpdateType {
 }
 
 #[derive(Debug, Clone)]
+pub struct ApkAsset {
+    pub variant: String,
+    pub url: String,
+    #[allow(dead_code)]
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct GithubUpdate {
     pub update_type: UpdateType,
     pub id: String, // release id, tag name, or commit sha
+    #[allow(dead_code)]
     pub tag_or_version: String,
     pub title: String,
     pub url: String,
     pub body: Option<String>,
+    #[allow(dead_code)]
     pub etag: Option<String>,
+    #[allow(dead_code)]
     pub sha: Option<String>,
+    pub apk_assets: Vec<ApkAsset>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,13 +59,24 @@ pub struct GithubClient {
     token: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug, Clone)]
+pub struct GhAsset {
+    pub name: String,
+    pub browser_download_url: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    pub size: Option<i64>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 struct GhRelease {
     id: u64,
     tag_name: String,
     name: Option<String>,
     html_url: String,
     body: Option<String>,
+    #[serde(default)]
+    assets: Vec<GhAsset>,
 }
 
 #[derive(Deserialize)]
@@ -117,6 +141,7 @@ impl GithubClient {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn check_repo(
         &self,
         owner: &str,
@@ -130,13 +155,19 @@ impl GithubClient {
     ) -> Result<CheckResult> {
         // 1. Try Releases API (/repos/{owner}/{repo}/releases/latest)
         if check_releases {
-            let release_url = format!("https://api.github.com/repos/{}/{}/releases/latest", owner, name);
+            let release_url = format!(
+                "https://api.github.com/repos/{}/{}/releases/latest",
+                owner, name
+            );
             let mut req = self.client.get(&release_url);
             if let Some(etag) = cached_etag {
                 req = req.header(IF_NONE_MATCH, etag);
             }
 
-            let resp = req.send().await.with_context(|| format!("HTTP GET failed for {}", release_url))?;
+            let resp = req
+                .send()
+                .await
+                .with_context(|| format!("HTTP GET failed for {}", release_url))?;
             self.check_rate_limit(resp.headers());
 
             if resp.status() == StatusCode::NOT_MODIFIED {
@@ -150,7 +181,8 @@ impl GithubClient {
                 .map(|s| s.to_string());
 
             if resp.status().is_success() {
-                let release: GhRelease = resp.json().await.context("Failed to parse release JSON")?;
+                let release: GhRelease =
+                    resp.json().await.context("Failed to parse release JSON")?;
                 let current_id = release.id.to_string();
 
                 if last_seen_id == Some(&current_id) || last_seen_id == Some(&release.tag_name) {
@@ -162,6 +194,36 @@ impl GithubClient {
                     .filter(|n| !n.trim().is_empty())
                     .unwrap_or_else(|| release.tag_name.clone());
 
+                // Filter and organize APK assets
+                let all_apk_assets: Vec<GhAsset> = release
+                    .assets
+                    .into_iter()
+                    .filter(|a| a.name.to_lowercase().ends_with(".apk"))
+                    .collect();
+
+                let apk_assets: Vec<ApkAsset> = if let Some(universal) = all_apk_assets
+                    .iter()
+                    .find(|a| a.name.to_lowercase().contains("universal"))
+                {
+                    vec![ApkAsset {
+                        variant: "universal".to_string(),
+                        url: universal.browser_download_url.clone(),
+                        name: universal.name.clone(),
+                    }]
+                } else {
+                    all_apk_assets
+                        .into_iter()
+                        .map(|a| {
+                            let variant = detect_variant(&a.name).unwrap_or("apk").to_string();
+                            ApkAsset {
+                                variant,
+                                url: a.browser_download_url,
+                                name: a.name,
+                            }
+                        })
+                        .collect()
+                };
+
                 return Ok(CheckResult::NewUpdate(GithubUpdate {
                     update_type: UpdateType::Release,
                     id: current_id,
@@ -171,6 +233,7 @@ impl GithubClient {
                     body: release.body,
                     etag: etag_header,
                     sha: None,
+                    apk_assets,
                 }));
             } else if resp.status() != StatusCode::NOT_FOUND {
                 let status = resp.status();
@@ -181,7 +244,10 @@ impl GithubClient {
 
         // 2. Fallback: Try Tags API (/repos/{owner}/{repo}/tags)
         if check_tags {
-            let tags_url = format!("https://api.github.com/repos/{}/{}/tags?per_page=1", owner, name);
+            let tags_url = format!(
+                "https://api.github.com/repos/{}/{}/tags?per_page=1",
+                owner, name
+            );
             let tags_resp = self
                 .client
                 .get(&tags_url)
@@ -191,13 +257,19 @@ impl GithubClient {
             self.check_rate_limit(tags_resp.headers());
 
             if tags_resp.status().is_success() {
-                let tags: Vec<GhTag> = tags_resp.json().await.context("Failed to parse tags JSON")?;
+                let tags: Vec<GhTag> = tags_resp
+                    .json()
+                    .await
+                    .context("Failed to parse tags JSON")?;
                 if let Some(tag) = tags.into_iter().next() {
-                    if last_seen_id == Some(&tag.name) || last_seen_sha.as_deref() == Some(&tag.commit.sha) {
+                    if last_seen_id == Some(&tag.name) || last_seen_sha == Some(&tag.commit.sha) {
                         return Ok(CheckResult::NotModified);
                     }
 
-                    let tag_url = format!("https://github.com/{}/{}/releases/tag/{}", owner, name, tag.name);
+                    let tag_url = format!(
+                        "https://github.com/{}/{}/releases/tag/{}",
+                        owner, name, tag.name
+                    );
                     return Ok(CheckResult::NewUpdate(GithubUpdate {
                         update_type: UpdateType::Tag,
                         id: tag.name.clone(),
@@ -207,6 +279,7 @@ impl GithubClient {
                         body: None,
                         etag: None,
                         sha: Some(tag.commit.sha),
+                        apk_assets: Vec::new(),
                     }));
                 }
             }
@@ -214,7 +287,10 @@ impl GithubClient {
 
         // 3. Fallback: Try Commits API (/repos/{owner}/{repo}/commits)
         if check_commits {
-            let commits_url = format!("https://api.github.com/repos/{}/{}/commits?per_page=1", owner, name);
+            let commits_url = format!(
+                "https://api.github.com/repos/{}/{}/commits?per_page=1",
+                owner, name
+            );
             let commits_resp = self
                 .client
                 .get(&commits_url)
@@ -224,9 +300,12 @@ impl GithubClient {
             self.check_rate_limit(commits_resp.headers());
 
             if commits_resp.status().is_success() {
-                let commits: Vec<GhCommit> = commits_resp.json().await.context("Failed to parse commits JSON")?;
+                let commits: Vec<GhCommit> = commits_resp
+                    .json()
+                    .await
+                    .context("Failed to parse commits JSON")?;
                 if let Some(commit) = commits.into_iter().next() {
-                    if last_seen_sha.as_deref() == Some(&commit.sha) || last_seen_id.as_deref() == Some(&commit.sha) {
+                    if last_seen_sha == Some(&commit.sha) || last_seen_id == Some(&commit.sha) {
                         return Ok(CheckResult::NotModified);
                     }
 
@@ -253,6 +332,7 @@ impl GithubClient {
                         body: Some(commit.commit.message),
                         etag: None,
                         sha: Some(commit.sha),
+                        apk_assets: Vec::new(),
                     }));
                 }
             }

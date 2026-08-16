@@ -1,0 +1,11 @@
+target/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+kostubet.db*
+.git/
+.env
+*.env
+!*.env.example
+deploy/

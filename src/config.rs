@@ -26,6 +26,68 @@ impl RepoConfig {
             None
         }
     }
+
+    /// Case-insensitively strips `prefix` from the start of `s`.
+    fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+        if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
+            Some(&s[prefix.len()..])
+        } else {
+            None
+        }
+    }
+
+    fn valid_github_segment(seg: &str) -> bool {
+        !seg.is_empty()
+            && seg.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    }
+
+    /// Accepts everything users realistically paste:
+    /// `owner/repo`, `github.com/owner/repo`,
+    /// `https://github.com/owner/repo`, `https://github.com/owner/repo/releases/tag/v1`
+    /// (extra path is dropped), `git@github.com:owner/repo.git`, any casing.
+    pub fn parse_ref(s: &str) -> Option<Self> {
+        let mut rest = s.trim();
+
+        for prefix in ["https://", "http://"] {
+            if let Some(stripped) = Self::strip_prefix_ci(rest, prefix) {
+                rest = stripped;
+            }
+        }
+        if let Some(stripped) = Self::strip_prefix_ci(rest, "www.") {
+            rest = stripped;
+        }
+        for prefix in ["github.com/", "github.com:", "git@github.com:"] {
+            if let Some(stripped) = Self::strip_prefix_ci(rest, prefix) {
+                rest = stripped;
+                break;
+            }
+        }
+
+        // Reject foreign URL hosts (gitlab.com/..., user@host:...): a valid
+        // GitHub owner name cannot contain '.', ':' or '@'.
+        let first_segment = rest.split(['/', ':']).next().unwrap_or("");
+        if first_segment.contains('.') || first_segment.contains('@') {
+            return None;
+        }
+
+        // Strip trailing slash and the `.git` suffix.
+        let rest = rest.trim_end_matches('/');
+        let rest = rest.strip_suffix(".git").unwrap_or(rest);
+
+        let mut parts = rest.split('/');
+        let owner = parts.next()?.trim();
+        let name = parts.next()?.trim();
+
+        if Self::valid_github_segment(owner) && Self::valid_github_segment(name) {
+            Some(Self {
+                owner: owner.to_string(),
+                name: name.to_string(),
+            })
+        } else {
+            None
+        }
+    }
 }
 
 pub fn parse_repo_list(s: &str) -> Vec<RepoConfig> {
@@ -72,15 +134,13 @@ fn default_db_path() -> String {
 
 impl Config {
     pub fn load<P: AsRef<Path>>(path: Option<P>, cli_dry_run: bool) -> Result<Self> {
-        let config_file_path = path
-            .map(|p| p.as_ref().to_path_buf())
-            .or_else(|| {
-                if Path::new("config.toml").exists() {
-                    Some(Path::new("config.toml").to_path_buf())
-                } else {
-                    None
-                }
-            });
+        let config_file_path = path.map(|p| p.as_ref().to_path_buf()).or_else(|| {
+            if Path::new("config.toml").exists() {
+                Some(Path::new("config.toml").to_path_buf())
+            } else {
+                None
+            }
+        });
 
         let mut config: Config = if let Some(ref p) = config_file_path {
             let content = fs::read_to_string(p)
@@ -127,7 +187,9 @@ impl Config {
             }
         }
 
-        if let Ok(thread_id_str) = env::var("TELEGRAM_ARCHIVE_THREAD_ID").or_else(|_| env::var("ARCHIVE_THREAD_ID")) {
+        if let Ok(thread_id_str) =
+            env::var("TELEGRAM_ARCHIVE_THREAD_ID").or_else(|_| env::var("ARCHIVE_THREAD_ID"))
+        {
             if let Ok(tid) = thread_id_str.trim().parse::<i64>() {
                 config.archive_thread_id = Some(tid);
             }
@@ -211,6 +273,41 @@ mod tests {
         assert!(RepoConfig::parse("invalid").is_none());
         assert!(RepoConfig::parse("/repo").is_none());
         assert!(RepoConfig::parse("owner/").is_none());
+    }
+
+    #[test]
+    fn test_repo_config_parse_ref_links() {
+        // Plain form
+        assert_eq!(
+            RepoConfig::parse_ref("tokio-rs/tokio").map(|r| r.full_name()),
+            Some("tokio-rs/tokio".to_string())
+        );
+        // Full https URL with extra path
+        assert_eq!(
+            RepoConfig::parse_ref("https://github.com/2dust/v2rayNG/releases/tag/1.8.5")
+                .map(|r| r.full_name()),
+            Some("2dust/v2rayNG".to_string())
+        );
+        // Case-insensitive host, no protocol
+        assert_eq!(
+            RepoConfig::parse_ref("GitHub.com/Rust-Lang/Rust").map(|r| r.full_name()),
+            Some("Rust-Lang/Rust".to_string())
+        );
+        // http, www, trailing slash
+        assert_eq!(
+            RepoConfig::parse_ref("http://www.github.com/serde-rs/serde/").map(|r| r.full_name()),
+            Some("serde-rs/serde".to_string())
+        );
+        // git@ SSH form with .git
+        assert_eq!(
+            RepoConfig::parse_ref("git@github.com:sqlite/sqlite.git").map(|r| r.full_name()),
+            Some("sqlite/sqlite".to_string())
+        );
+        // Rejections
+        assert!(RepoConfig::parse_ref("").is_none());
+        assert!(RepoConfig::parse_ref("https://gitlab.com/a/b").is_none());
+        assert!(RepoConfig::parse_ref("https://github.com/onlyowner").is_none());
+        assert!(RepoConfig::parse_ref("https://github.com/a/b c").is_none());
     }
 
     #[test]
