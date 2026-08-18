@@ -1,6 +1,6 @@
 [package]
 name = "kostubet-github"
-version = "1.0.0"
+version = "1.2.0"
 edition = "2021"
 authors = ["Kostubet"]
 description = "A Telegram bot watching GitHub repositories and posting release/tag/commit updates to a forum topic."

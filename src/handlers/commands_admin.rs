@@ -250,7 +250,7 @@ pub async fn handle_track(bot: &Bot, msg: &Message, args: &str, db: &Database) -
 
     match db
         .tools()
-        .add_tool(&repo.owner, &repo.name, sender_id, None)
+        .add_tool(&repo.owner, &repo.name, sender_id, None, None)
         .await
     {
         Ok(tool_id) => {
@@ -702,6 +702,11 @@ pub async fn handle_test(
             "⬇️ Скачать (universal)".to_string(),
             DownloadTarget::Url("https://github.com/tokio-rs/tokio".to_string()),
         )],
+        suggested_by: msg
+            .from
+            .as_ref()
+            .and_then(|u| u.username.clone())
+            .or_else(|| Some("kostubet".to_string())),
     };
 
     match crate::services::render::send_post(bot, target_chat_id, target_thread_id, &sample_post)

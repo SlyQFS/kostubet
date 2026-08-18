@@ -37,7 +37,6 @@ pub fn global() -> Option<&'static GithubClient> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateType {
     Release,
-    Tag,
     Commit,
 }
 
@@ -45,7 +44,6 @@ impl std::fmt::Display for UpdateType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             UpdateType::Release => write!(f, "Release"),
-            UpdateType::Tag => write!(f, "Tag"),
             UpdateType::Commit => write!(f, "Commit"),
         }
     }
@@ -66,7 +64,7 @@ pub struct GithubUpdate {
     pub url: String,
     pub body: Option<String>,
     /// ETag of the releases response (only the releases endpoint is
-    /// conditionally polled; tags/commits dedup by id).
+    /// conditionally polled; commits dedup by sha).
     pub etag: Option<String>,
     pub apk_assets: Vec<ApkAsset>,
 }
@@ -103,17 +101,6 @@ struct GhRelease {
     prerelease: bool,
     #[serde(default)]
     assets: Vec<GhAsset>,
-}
-
-#[derive(Deserialize)]
-struct GhCommitRef {
-    sha: String,
-}
-
-#[derive(Deserialize)]
-struct GhTag {
-    name: String,
-    commit: GhCommitRef,
 }
 
 #[derive(Deserialize)]
@@ -260,7 +247,6 @@ impl GithubClient {
         cached_etag: Option<&str>,
         last_seen_id: Option<&str>,
         check_releases: bool,
-        check_tags: bool,
         check_commits: bool,
         include_prereleases: bool,
     ) -> Result<CheckResult> {
@@ -269,9 +255,9 @@ impl GithubClient {
         let mut endpoints_checked = 0usize;
         let mut endpoints_404 = 0usize;
 
-        // 1. Releases: poll the LIST endpoint (per_page=N) instead of
-        // /releases/latest — the latter silently skips pre-releases, so
-        // repositories publishing beta builds would never produce updates.
+        // 1. Releases & Pre-releases (including nightly builds): poll the LIST endpoint (per_page=N)
+        // instead of /releases/latest — the latter silently skips pre-releases, so
+        // repositories publishing beta / nightly builds would never produce updates.
         if check_releases {
             endpoints_checked += 1;
             let release_url = format!(
@@ -305,9 +291,8 @@ impl GithubClient {
                 .map(|s| s.to_string());
 
             if resp.status() == StatusCode::NOT_FOUND {
-                // Repo has no releases at all — fall through to tags.
                 endpoints_404 += 1;
-                warn!("No releases found for {}/{} (404), falling back to tags", owner, name);
+                warn!("No releases found for {}/{} (404)", owner, name);
             } else if resp.status().is_success() {
                 let mut releases: Vec<GhRelease> = resp
                     .json()
@@ -344,30 +329,65 @@ impl GithubClient {
                         title
                     };
 
-                    // Filter and organize APK assets
+                    // Filter and organize binary/package assets (.apk, .zip, .7z)
                     let all_apk_assets: Vec<GhAsset> = newest
                         .assets
                         .iter()
-                        .filter(|a| a.name.to_lowercase().ends_with(".apk"))
+                        .filter(|a| {
+                            let name = a.name.to_lowercase();
+                            name.ends_with(".apk") || name.ends_with(".zip") || name.ends_with(".7z")
+                        })
                         .cloned()
                         .collect();
 
-                    let apk_assets: Vec<ApkAsset> = if let Some(universal) = all_apk_assets
+                    let has_archives = all_apk_assets
                         .iter()
-                        .find(|a| a.name.to_lowercase().contains("universal"))
-                    {
+                        .any(|a| {
+                            let name = a.name.to_lowercase();
+                            name.ends_with(".zip") || name.ends_with(".7z")
+                        });
+
+                    let apk_assets: Vec<ApkAsset> = if has_archives {
                         vec![ApkAsset {
-                            variant: "universal".to_string(),
-                            url: universal.browser_download_url.clone(),
+                            variant: "release".to_string(),
+                            url: newest.html_url.clone(),
                         }]
                     } else {
-                        all_apk_assets
-                            .into_iter()
-                            .map(|a| ApkAsset {
-                                variant: detect_variant(&a.name).unwrap_or("apk").to_string(),
-                                url: a.browser_download_url,
-                            })
-                            .collect()
+                        let apk_files: Vec<&GhAsset> = all_apk_assets
+                            .iter()
+                            .filter(|a| a.name.to_lowercase().ends_with(".apk"))
+                            .collect();
+
+                        if apk_files.is_empty() {
+                            Vec::new()
+                        } else if let Some(universal) = apk_files
+                            .iter()
+                            .find(|a| detect_variant(&a.name) == Some("universal") || a.name.to_lowercase().contains("universal"))
+                        {
+                            vec![ApkAsset {
+                                variant: "universal".to_string(),
+                                url: universal.browser_download_url.clone(),
+                            }]
+                        } else if let Some(v8) = apk_files
+                            .iter()
+                            .find(|a| detect_variant(&a.name) == Some("arm64-v8a"))
+                        {
+                            vec![ApkAsset {
+                                variant: "arm64-v8a".to_string(),
+                                url: v8.browser_download_url.clone(),
+                            }]
+                        } else if apk_files.len() == 1 && detect_variant(&apk_files[0].name) != Some("armeabi-v7a") {
+                            let single = apk_files[0];
+                            vec![ApkAsset {
+                                variant: detect_variant(&single.name).unwrap_or("apk").to_string(),
+                                url: single.browser_download_url.clone(),
+                            }]
+                        } else {
+                            vec![ApkAsset {
+                                variant: "release".to_string(),
+                                url: newest.html_url.clone(),
+                            }]
+                        }
                     };
 
                     return Ok(CheckResult::NewUpdate(GithubUpdate {
@@ -380,11 +400,7 @@ impl GithubClient {
                         apk_assets,
                     }));
                 }
-                // Empty release list — fall through to tags.
             } else {
-                // Transient error (5xx, secondary limits): do NOT fall through
-                // to tags — that could post a false "tag" update for a repo
-                // whose release check simply failed.
                 let status = resp.status();
                 let text = resp.text().await.unwrap_or_default();
                 warn!("GitHub releases returned status {}: {}", status, text);
@@ -392,60 +408,7 @@ impl GithubClient {
             }
         }
 
-        // 2. Fallback: Tags API (/repos/{owner}/{repo}/tags)
-        if check_tags {
-            endpoints_checked += 1;
-            let tags_url = format!("{}/repos/{}/{}/tags?per_page=1", API_BASE, owner, name);
-            let tags_resp = self
-                .client
-                .get(&tags_url)
-                .send()
-                .await
-                .with_context(|| format!("HTTP GET failed for {}", tags_url))?;
-
-            if let Some(retry_after) =
-                self.rate_limited_for(tags_resp.status(), tags_resp.headers())
-            {
-                return Ok(CheckResult::RateLimited {
-                    retry_after_secs: retry_after,
-                });
-            }
-
-            if tags_resp.status() == StatusCode::NOT_FOUND {
-                endpoints_404 += 1;
-            } else if tags_resp.status().is_success() {
-                let tags: Vec<GhTag> = tags_resp
-                    .json()
-                    .await
-                    .context("Failed to parse tags JSON")?;
-                if let Some(tag) = tags.into_iter().next() {
-                    // Cross-kind dedup: releases store their id, commits their sha.
-                    if last_seen_id == Some(&tag.name)
-                        || last_seen_id == Some(&tag.commit.sha)
-                    {
-                        return Ok(CheckResult::NotModified);
-                    }
-
-                    // tree/{tag} always resolves; releases/tag/{tag} 404s for
-                    // tags that never got a release.
-                    let tag_url = format!(
-                        "https://github.com/{}/{}/tree/{}",
-                        owner, name, tag.name
-                    );
-                    return Ok(CheckResult::NewUpdate(GithubUpdate {
-                        update_type: UpdateType::Tag,
-                        id: tag.name.clone(),
-                        title: format!("Tag {}", tag.name),
-                        url: tag_url,
-                        body: None,
-                        etag: None,
-                        apk_assets: Vec::new(),
-                    }));
-                }
-            }
-        }
-
-        // 3. Fallback: Commits API (/repos/{owner}/{repo}/commits)
+        // 2. Fallback: Commits API (/repos/{owner}/{repo}/commits)
         if check_commits {
             endpoints_checked += 1;
             let commits_url = format!("{}/repos/{}/{}/commits?per_page=1", API_BASE, owner, name);

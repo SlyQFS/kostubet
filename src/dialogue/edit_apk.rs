@@ -170,6 +170,7 @@ pub async fn handle_edit_message(
                 data.diff_url.clone(),
                 data.cover_image_file_id.clone(),
                 data.tags.clone(),
+                data.submitted_by_username.clone(),
             );
 
             let preview_text = render_post_text(&post);

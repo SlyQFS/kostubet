@@ -18,18 +18,18 @@ pub async fn handle_start(bot: &Bot, msg: &Message) -> Result<()> {
 
     let kb = InlineKeyboardMarkup::new(vec![
         vec![
-            InlineKeyboardButton::callback("💡 Предложить репозиторий", "start:suggest"),
-            InlineKeyboardButton::callback("📱 Загрузить APK", "start:submitapk"),
+            InlineKeyboardButton::callback("💡 Предложить", "start:suggest"),
+            InlineKeyboardButton::callback("📦 Загрузить", "start:submitapk"),
         ],
         vec![
-            InlineKeyboardButton::callback("📋 Каталог приложений", "start:apps"),
-            InlineKeyboardButton::callback("❓ Справка", "start:help"),
+            InlineKeyboardButton::callback("📋 Каталог", "start:apps"),
+            InlineKeyboardButton::callback("❓ Помощь", "start:help"),
         ],
     ]);
 
-    let text = "👋 <b>Добро пожаловать в Kostubet Bot!</b> 🚀\n\n\
-        Бот отслеживает релизы инструментов на GitHub и публикует обновления приложений для Android (APK).\n\n\
-        Выберите действие с помощью кнопок ниже или отправьте <code>/help</code> для вывода всех команд:";
+    let text = "👋 <b>Kostubet Bot</b>\n\n\
+        Отслеживание GitHub-релизов и каталог приложений.\n\n\
+        Выберите действие:";
 
     bot.send_message(chat_id, text)
         .parse_mode(ParseMode::Html)
@@ -48,37 +48,34 @@ pub async fn handle_help(bot: &Bot, msg: &Message, db: &Database) -> Result<()> 
 pub async fn send_help(bot: &Bot, chat_id: ChatId, sender_id: i64, db: &Database) -> Result<()> {
     let is_admin = db.admins().is_admin(sender_id).await.unwrap_or(false);
 
-    let mut help_text = "<b>Kostubet GitHub & APK Watcher Bot 🚀</b>\n\n\
-        <b>Публичные команды (в ЛС):</b>\n\
-        • <code>/suggest [ссылка]</code> — Предложить GitHub-репозиторий (кнопочный мастер без аргументов)\n\
-        • <code>/mysuggestions</code> — Статус ваших предложенных заявок\n\
-        • <code>/submitapk</code> — Загрузить новое приложение / обновление APK\n\
-        • <code>/apps</code> — Список опубликованных кастомных приложений\n\
-        • <code>/cancel</code> — Отменить текущий диалог\n\
-        • <code>/help</code> — Эта справка\n"
+    let mut help_text = "<b>Команды:</b>\n\
+        • <code>/suggest [ссылка]</code> — предложить репозиторий\n\
+        • <code>/submitapk</code> — загрузить APK или модуль\n\
+        • <code>/apps</code> — каталог приложений\n\
+        • <code>/mysuggestions</code> — мои заявки\n\
+        • <code>/cancel</code> — отмена\n\
+        • <code>/help</code> — помощь\n"
         .to_string();
 
     if is_admin {
         help_text.push_str(
-            "\n<b>Команды администратора:</b>\n\
-            • <code>/admin</code> — Кнопочная панель управления (репозитории, теги, заявки, админы)\n\
-            • <code>/track [ссылка] [#теги]</code> — Начать отслеживание (принимает ссылки GitHub)\n\
-            • <code>/untrack owner/repo</code> — Прекратить отслеживание\n\
-            • <code>/addtag owner/repo #tag</code> — Добавить тег инструменту\n\
-            • <code>/removetag owner/repo #tag</code> — Удалить тег у инструмента\n\
-            • <code>/list</code> — Список отслеживаемых инструментов\n\
-            • <code>/tags</code> — Канонический список тегов\n\
-            • <code>/pending</code> — Очередь заявок на модерацию\n\
-            • <code>/admins</code> — Список администраторов\n\
-            • <code>/test</code> — Отправить тестовую карточку релиза\n",
+            "\n<b>Админ:</b>\n\
+            • <code>/admin</code> — панель управления\n\
+            • <code>/track [ссылка] [#теги]</code> — отслеживать\n\
+            • <code>/untrack owner/repo</code> — удалить\n\
+            • <code>/pending</code> — заявки на модерацию\n\
+            • <code>/list</code> — список репозиториев\n\
+            • <code>/tags</code> — список тегов\n\
+            • <code>/admins</code> — список админов\n\
+            • <code>/test</code> — тест карточки\n",
         );
 
         if db.admins().is_owner(sender_id).await.unwrap_or(false) {
             help_text.push_str(
-                "\n<b>Команды владельца:</b>\n\
-                • <code>/addadmin &lt;id&gt;</code> — Добавить администратора\n\
-                • <code>/removeadmin &lt;id&gt;</code> — Удалить администратора\n\
-                • <code>/debug</code> — Диагностика и состояние бота\n",
+                "\n<b>Владелец:</b>\n\
+                • <code>/addadmin &lt;id&gt;</code> — добавить админа\n\
+                • <code>/removeadmin &lt;id&gt;</code> — удалить админа\n\
+                • <code>/debug</code> — статус бота\n",
             );
         }
     }
@@ -124,11 +121,9 @@ pub async fn handle_suggest(
 
         bot.send_message(
             chat_id,
-            "💡 <b>Предложить репозиторий</b>\n\n\
-            Отправьте ссылку на репозиторий GitHub:\n\
-            <code>https://github.com/owner/repo</code> — или просто <code>owner/repo</code>\n\n\
-            Отмена: <code>/cancel</code>",
+            "💡 Отправьте ссылку на репозиторий (например: <code>https://github.com/owner/example</code> или <code>owner/example</code>):",
         )
+        .reply_markup(crate::dialogue::suggest::cancel_keyboard())
         .parse_mode(ParseMode::Html)
         .await?;
         return Ok(());
@@ -138,9 +133,7 @@ pub async fn handle_suggest(
     let Some(repo) = RepoConfig::parse_ref(parts[0]) else {
         bot.send_message(
             chat_id,
-            "❌ Неверный репозиторий! Отправьте ссылку вида\n\
-            <code>https://github.com/owner/repo</code> или <code>owner/repo</code>\n\n\
-            Например: <code>/suggest https://github.com/2dust/v2rayNG</code>",
+            "❌ Отправьте ссылку вида: <code>https://github.com/owner/example</code> или <code>owner/example</code>",
         )
         .parse_mode(ParseMode::Html)
         .await?;
@@ -279,18 +272,18 @@ pub async fn start_submitapk(
     if matches!(cur_state, Some(DialogueState::SubmitApk(_))) {
         let kb = InlineKeyboardMarkup::new(vec![
             vec![
-                InlineKeyboardButton::callback("▶️ Продолжить текущую", "submitresume:continue"),
-                InlineKeyboardButton::callback("🔄 Начать заново", "submitresume:restart"),
+                InlineKeyboardButton::callback("▶️ Продолжить", "submitresume:continue"),
+                InlineKeyboardButton::callback("🔄 Заново", "submitresume:restart"),
             ],
             vec![InlineKeyboardButton::callback(
-                "❌ Отменить всё",
+                "❌ Отменить",
                 "submitresume:cancel",
             )],
         ]);
 
         bot.send_message(
             chat_id,
-            "⚠️ <b>У вас есть незавершенная заявка.</b>\nЧто сделать с ней?",
+            "⚠️ <b>Есть незавершенная заявка.</b>\nЧто сделать?",
         )
         .parse_mode(ParseMode::Html)
         .reply_markup(kb)
@@ -304,19 +297,18 @@ pub async fn start_submitapk(
 
     let kb = InlineKeyboardMarkup::new(vec![
         vec![
-            InlineKeyboardButton::callback("🆕 Новое приложение", "submit_mode:new"),
-            InlineKeyboardButton::callback("🔄 Обновление существующего", "submit_mode:update"),
+            InlineKeyboardButton::callback("🆕 Новое", "submit_mode:new"),
+            InlineKeyboardButton::callback("🔄 Обновление", "submit_mode:update"),
         ],
         vec![InlineKeyboardButton::callback(
-            "❌ Отмена",
+            "❌ Отменить",
             "submit_confirm:cancel",
         )],
     ]);
 
     bot.send_message(
         chat_id,
-        "📱 <b>Мастер публикации приложения / APK</b>\n\n\
-        Выберите тип публикации:",
+        "📦 <b>Публикация APK / модуля</b>\n\nВыберите тип:",
     )
     .parse_mode(ParseMode::Html)
     .reply_markup(kb)

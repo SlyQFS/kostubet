@@ -21,6 +21,8 @@ pub struct TrackedToolRecord {
     pub added_at: String,
     /// Optional human-readable description shown in release cards.
     pub description: Option<String>,
+    /// Optional username who suggested the tool.
+    pub suggested_by: Option<String>,
 }
 
 impl TrackedToolRecord {
@@ -39,6 +41,7 @@ impl TrackedToolRecord {
             added_by: r.get("added_by"),
             added_at: r.get("added_at"),
             description: r.get("description"),
+            suggested_by: r.get("suggested_by"),
         }
     }
 }
@@ -58,6 +61,7 @@ impl<'a> ToolsRepo<'a> {
         repo: &str,
         added_by: i64,
         description: Option<&str>,
+        suggested_by: Option<&str>,
     ) -> Result<i64> {
         let existing = self.get_tool(owner, repo).await?;
         if let Some(tool) = existing {
@@ -66,19 +70,23 @@ impl<'a> ToolsRepo<'a> {
             if description.is_some() && tool.description.as_deref() != description {
                 self.set_tool_description(tool.id, description).await?;
             }
+            if suggested_by.is_some() && tool.suggested_by.as_deref() != suggested_by {
+                self.set_tool_suggested_by(tool.id, suggested_by).await?;
+            }
             return Ok(tool.id);
         }
 
         let res = sqlx::query(
             r#"
-            INSERT INTO tracked_tools (owner, repo, added_by, added_at, description)
-            VALUES (?, ?, ?, datetime('now'), ?)
+            INSERT INTO tracked_tools (owner, repo, added_by, added_at, description, suggested_by)
+            VALUES (?, ?, ?, datetime('now'), ?, ?)
             "#,
         )
         .bind(owner)
         .bind(repo)
         .bind(added_by)
         .bind(description)
+        .bind(suggested_by)
         .execute(self.pool)
         .await
         .context("Failed to insert tracked tool")?;
@@ -94,6 +102,17 @@ impl<'a> ToolsRepo<'a> {
             .execute(self.pool)
             .await
             .context("Failed to update tracked tool description")?;
+        Ok(())
+    }
+
+    /// Sets or clears (None) the optional suggested_by of a tracked tool.
+    pub async fn set_tool_suggested_by(&self, id: i64, suggested_by: Option<&str>) -> Result<()> {
+        sqlx::query("UPDATE tracked_tools SET suggested_by = ? WHERE id = ?")
+            .bind(suggested_by)
+            .bind(id)
+            .execute(self.pool)
+            .await
+            .context("Failed to update tracked tool suggested_by")?;
         Ok(())
     }
 
@@ -120,7 +139,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool(&self, owner: &str, repo: &str) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by
             FROM tracked_tools
             WHERE owner = ? AND repo = ?
             "#,
@@ -137,7 +156,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool_by_id(&self, id: i64) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by
             FROM tracked_tools
             WHERE id = ?
             "#,
@@ -153,7 +172,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn list_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by
             FROM tracked_tools
             ORDER BY owner ASC, repo ASC
             "#,
@@ -219,7 +238,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn list_failing_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by
             FROM tracked_tools
             WHERE fail_count > 0
             ORDER BY fail_count DESC, owner ASC

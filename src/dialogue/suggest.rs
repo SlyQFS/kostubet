@@ -85,14 +85,27 @@ pub async fn validate_new_suggestion(
 pub fn suggest_confirm_keyboard() -> InlineKeyboardMarkup {
     InlineKeyboardMarkup::new(vec![
         vec![
-            InlineKeyboardButton::callback("✅ Предложить", "sugg_send"),
+            InlineKeyboardButton::callback("✅ Отправить", "sugg_send"),
             InlineKeyboardButton::callback("🏷 Теги", "sugg_tags"),
         ],
         vec![
             InlineKeyboardButton::callback("📝 Описание", "sugg_desc"),
-            InlineKeyboardButton::callback("❌ Отмена", "sugg_cancel"),
+            InlineKeyboardButton::callback("❌ Отменить", "sugg_cancel"),
         ],
     ])
+}
+
+pub fn skip_or_cancel_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("⏩ Пропустить", "sugg_skip"),
+        InlineKeyboardButton::callback("❌ Отменить", "sugg_cancel"),
+    ]])
+}
+
+pub fn cancel_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("❌ Отменить", "sugg_cancel"),
+    ]])
 }
 
 pub async fn send_suggest_confirm(
@@ -117,12 +130,12 @@ pub async fn send_suggest_confirm(
     bot.send_message(
         chat_id,
         format!(
-            "💡 <b>Предложить репозиторий</b>\n\n\
+            "💡 <b>Предложение репозитория</b>\n\n\
             📦 <code>{}/{}</code>\n\
             🔗 https://github.com/{}/{}\n\
             📝 Описание: <i>{}</i>\n\
             🏷 Теги: <code>{}</code>\n\n\
-            Отправить заявку на рассмотрение администраторам?",
+            Отправить заявку?",
             encode_text(&data.owner),
             encode_text(&data.name),
             encode_text(&data.owner),
@@ -160,10 +173,9 @@ pub async fn handle_suggest_message(
             let Some(repo) = RepoConfig::parse_ref(&text) else {
                 bot.send_message(
                     chat_id,
-                    "❌ Не удалось распознать репозиторий. Отправьте ссылку вида:\n\
-                    <code>https://github.com/owner/repo</code> или <code>owner/repo</code>\n\n\
-                    Или отправьте <code>/cancel</code> для отмены.",
+                    "❌ Отправьте ссылку вида: <code>https://github.com/owner/example</code> или <code>owner/example</code>",
                 )
+                .reply_markup(cancel_keyboard())
                 .parse_mode(ParseMode::Html)
                 .await?;
                 return Ok(());
@@ -193,8 +205,9 @@ pub async fn handle_suggest_message(
         SuggestState::Confirm { .. } => {
             bot.send_message(
                 chat_id,
-                "ℹ️ Подтвердите отправку кнопкой <b>✅ Предложить</b>, добавьте теги или описание, либо отмените предложение.",
+                "ℹ️ Нажмите <b>✅ Отправить</b>, измените описание/теги или нажмите <b>❌ Отменить</b>.",
             )
+            .reply_markup(suggest_confirm_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
             Ok(())
@@ -204,8 +217,9 @@ pub async fn handle_suggest_message(
                 if let Err(err) = crate::dialogue::validate_description(&text) {
                     bot.send_message(
                         chat_id,
-                        format!("{}\n\nПовторите ввод или отправьте <code>/skip</code>.", err),
+                        format!("{}\n\nПовторите ввод или нажмите <b>Пропустить</b>.", err),
                     )
+                    .reply_markup(skip_or_cancel_keyboard())
                     .parse_mode(ParseMode::Html)
                     .await?;
                     return Ok(());

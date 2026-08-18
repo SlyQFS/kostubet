@@ -71,6 +71,7 @@ pub async fn handle_apk_approve(
         ver.diff_url.clone(),
         ver.cover_image_file_id.clone(),
         tags,
+        ver.submitted_by_username.clone(),
     );
 
     // Publish; on failure roll the version back to `pending` so it returns
@@ -314,6 +315,7 @@ pub async fn handle_apk_edit_start(
         diff_url: ver.diff_url,
         cover_image_file_id: ver.cover_image_file_id,
         tags: tags.into_iter().map(|t| t.name).collect(),
+        submitted_by_username: ver.submitted_by_username,
     });
 
     let cur_title = edit_data
@@ -419,6 +421,7 @@ pub async fn handle_apk_edit_publish(
             data.diff_url.clone(),
             data.cover_image_file_id.clone(),
             data.tags.clone(),
+            data.submitted_by_username.clone(),
         );
 
         if target_chat_id == 0 {

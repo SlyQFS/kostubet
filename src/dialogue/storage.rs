@@ -174,6 +174,7 @@ mod tests {
                 cover_image_file_id: None,
                 apk_files: Vec::new(),
                 tags: vec!["tool".to_string()],
+                submitted_by_username: Some("test_user".to_string()),
             }),
         });
 

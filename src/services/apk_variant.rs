@@ -1,5 +1,5 @@
-/// Detects the CPU architecture / APK variant label from a given filename.
-/// Returns standard canonical labels: "universal", "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+/// Detects the CPU architecture / package variant label from a given filename.
+/// Returns standard canonical labels: "universal", "arm64-v8a", "armeabi-v7a", "x86_64", "x86", "archive"
 pub fn detect_variant(filename: &str) -> Option<&'static str> {
     let f = filename.to_lowercase();
     if f.contains("universal") {
@@ -10,6 +10,8 @@ pub fn detect_variant(filename: &str) -> Option<&'static str> {
         || f.contains("arm64_v8a")
         || f.contains("arm64")
         || f.contains("aarch64")
+        || f.contains("armv8")
+        || f.contains("v8a")
     {
         return Some("arm64-v8a");
     }
@@ -19,6 +21,7 @@ pub fn detect_variant(filename: &str) -> Option<&'static str> {
         || f.contains("armv7a")
         || f.contains("armv7")
         || f.contains("armeabi")
+        || f.contains("v7a")
     {
         return Some("armeabi-v7a");
     }
@@ -29,6 +32,16 @@ pub fn detect_variant(filename: &str) -> Option<&'static str> {
 
     if f.contains("x86") || f.contains("i686") || f.contains("i386") {
         return Some("x86");
+    }
+
+    if f.ends_with(".zip")
+        || f.ends_with(".7z")
+        || f.ends_with(".tar.gz")
+        || f.ends_with(".tar.xz")
+        || f.ends_with(".tgz")
+        || f.ends_with(".rar")
+    {
+        return Some("archive");
     }
 
     None
@@ -52,6 +65,10 @@ mod tests {
         );
         assert_eq!(detect_variant("app-x86_64.apk"), Some("x86_64"));
         assert_eq!(detect_variant("app-x86.apk"), Some("x86"));
+        assert_eq!(detect_variant("tools.7z"), Some("archive"));
+        assert_eq!(detect_variant("module.zip"), Some("archive"));
+        assert_eq!(detect_variant("package.tar.gz"), Some("archive"));
+        assert_eq!(detect_variant("module-arm64.zip"), Some("arm64-v8a"));
         assert_eq!(detect_variant("my-application.apk"), None);
     }
 }

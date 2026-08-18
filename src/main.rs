@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
 
     // Sync static repos from config file/env to database
     for repo in &config.repos {
-        let _ = db.tools().add_tool(&repo.owner, &repo.name, 0, None).await;
+        let _ = db.tools().add_tool(&repo.owner, &repo.name, 0, None, None).await;
     }
 
     let bot = Bot::new(&config.telegram_bot_token);

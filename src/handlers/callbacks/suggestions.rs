@@ -68,6 +68,7 @@ pub async fn handle_suggestion_approve(
             &sugg.repo,
             user_id,
             sugg.proposed_description.as_deref(),
+            sugg.username.as_deref(),
         )
         .await;
 

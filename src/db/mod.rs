@@ -44,8 +44,14 @@ impl Database {
             .journal_mode(SqliteJournalMode::Wal)
             .busy_timeout(Duration::from_secs(5));
 
+        let max_conn = if db_path == ":memory:" || db_path.contains("mode=memory") {
+            1
+        } else {
+            5
+        };
+
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_conn)
             .connect_with(options)
             .await
             .with_context(|| format!("Failed to connect to SQLite database at {}", db_path))?;
@@ -110,6 +116,7 @@ impl Database {
                 added_by     INTEGER NOT NULL DEFAULT 0,
                 added_at     TEXT NOT NULL,
                 description  TEXT,
+                suggested_by TEXT,
                 UNIQUE(owner, repo)
             );
 
@@ -163,6 +170,7 @@ impl Database {
                 diff_url              TEXT,
                 cover_image_file_id   TEXT,
                 submitted_by          INTEGER NOT NULL,
+                submitted_by_username TEXT,
                 status                TEXT NOT NULL DEFAULT 'pending',
                 reviewed_by           INTEGER,
                 reviewed_at           TEXT,
@@ -220,11 +228,13 @@ impl Database {
                 .await;
         }
 
-        // Idempotent check: optional description columns (repo / suggestion / app)
+        // Idempotent check: optional description and proposer/submitter columns (repo / suggestion / app)
         for (table, column) in [
             ("tracked_tools", "description"),
+            ("tracked_tools", "suggested_by"),
             ("suggestions", "proposed_description"),
             ("custom_apps", "description"),
+            ("custom_app_versions", "submitted_by_username"),
         ] {
             let has_column: Option<i64> = sqlx::query_scalar(&format!(
                 "SELECT COUNT(1) FROM pragma_table_info('{}') WHERE name = '{}';",
@@ -326,7 +336,7 @@ mod tests {
         // 2. Tools, Tags & ETag
         let tool_id = db
             .tools()
-            .add_tool("tokio-rs", "tokio", 100, Some("Async runtime"))
+            .add_tool("tokio-rs", "tokio", 100, Some("Async runtime"), Some("slyqfs"))
             .await?;
         let tag_id = db.tags().get_or_create_tag("async").await?;
         db.tags()
@@ -344,6 +354,7 @@ mod tests {
         assert_eq!(tool.last_release.as_deref(), Some("v1.40.0"));
         assert_eq!(tool.etag.as_deref(), Some("W/\"etag_123\""));
         assert_eq!(tool.description.as_deref(), Some("Async runtime"));
+        assert_eq!(tool.suggested_by.as_deref(), Some("slyqfs"));
 
         db.tools()
             .set_tool_description(tool_id, Some("Updated description"))
@@ -406,6 +417,7 @@ mod tests {
                 None,
                 None,
                 400,
+                Some("author_user"),
             )
             .await?;
         db.custom_apps()
@@ -421,6 +433,7 @@ mod tests {
 
         let pending_vers = db.custom_apps().get_pending_versions().await?;
         assert_eq!(pending_vers.len(), 1);
+        assert_eq!(pending_vers[0].0.submitted_by_username.as_deref(), Some("author_user"));
 
         let ver_approved = db
             .custom_apps()
@@ -437,13 +450,17 @@ mod tests {
         let current = db.custom_apps().get_current_version(app.id).await?.unwrap();
         assert_eq!(current.version, "1.0.0");
         assert_eq!(current.published_message_id, Some(777));
+        assert_eq!(current.submitted_by_username.as_deref(), Some("author_user"));
 
         Ok(())
     }
 
     #[tokio::test]
     async fn test_description_columns_migrated_on_legacy_tables() -> Result<()> {
-        let pool = SqlitePool::connect(":memory:").await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(":memory:")
+            .await?;
 
         // Old-schema tables without the description columns.
         sqlx::query(
@@ -493,10 +510,11 @@ mod tests {
         // The migration must have added the columns and existing data survives.
         let tool = db.tools().get_tool("tokio-rs", "tokio").await?.unwrap();
         assert_eq!(tool.description, None);
+        assert_eq!(tool.suggested_by, None);
 
         let tool_id = db
             .tools()
-            .add_tool("tokio-rs", "tokio", 1, Some("desc"))
+            .add_tool("tokio-rs", "tokio", 1, Some("desc"), None)
             .await?;
         assert_eq!(
             db.tools().get_tool_by_id(tool_id).await?.unwrap().description.as_deref(),
@@ -523,7 +541,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_legacy_migration_safety() -> Result<()> {
-        let pool = SqlitePool::connect(":memory:").await?;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect(":memory:")
+            .await?;
 
         // Create legacy table mimicking old database with etag
         sqlx::query(

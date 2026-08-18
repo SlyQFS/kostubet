@@ -100,6 +100,7 @@ pub async fn handle_submit_app_select(
             cover_image_file_id: None,
             apk_files: Vec::new(),
             tags: Vec::new(),
+            submitted_by_username: q.from.username.clone(),
         });
 
         dialogue
@@ -146,7 +147,7 @@ pub async fn handle_variant_select(
             bot.send_message(
                 msg.chat().id,
                 format!(
-                    "✅ Архитектура <b>{}</b> сохранена!\nВсего файлов: <b>{}</b>.\n\nОтправьте следующий .apk файл или команду <code>/done</code>.",
+                    "✅ Архитектура/тип <b>{}</b> сохранена!\nВсего файлов: <b>{}</b>.\n\nОтправьте следующий файл (.apk, .zip, .7z) или команду <code>/done</code>.",
                     variant, count
                 ),
             )
@@ -210,6 +211,7 @@ pub async fn handle_submit_confirm_send(
                 data.diff_url.as_deref(),
                 data.cover_image_file_id.as_deref(),
                 user_id,
+                username.as_deref(),
             )
             .await?;
 
@@ -410,6 +412,115 @@ pub async fn handle_submit_resume(
             let _ = bot
                 .edit_message_text(msg.chat().id, msg.id(), crate::strings::CANCEL_MESSAGE)
                 .await;
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+pub async fn handle_submit_skip(
+    bot: &Bot,
+    q: &CallbackQuery,
+    dialogue: &BotDialogue,
+) -> Result<()> {
+    let cur_state = dialogue.get().await?;
+    let Some(DialogueState::SubmitApk(state)) = cur_state else {
+        return Ok(());
+    };
+
+    let chat_id = q.message.as_ref().map(|m| m.chat().id);
+
+    match state {
+        SubmitApkState::WaitingDescription { data } => {
+            dialogue
+                .update(DialogueState::SubmitApk(SubmitApkState::WaitingVersion {
+                    data,
+                }))
+                .await?;
+            if let Some(cid) = chat_id {
+                bot.send_message(
+                    cid,
+                    "📦 Введите версию (например: <code>1.0.0</code>):",
+                )
+                .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
+            }
+        }
+        SubmitApkState::WaitingTitle { data } => {
+            dialogue
+                .update(DialogueState::SubmitApk(SubmitApkState::WaitingChangelog {
+                    data,
+                }))
+                .await?;
+            if let Some(cid) = chat_id {
+                bot.send_message(
+                    cid,
+                    "📝 Введите список изменений (например: <i>example</i>):",
+                )
+                .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
+            }
+        }
+        SubmitApkState::WaitingChangelog { data } => {
+            dialogue
+                .update(DialogueState::SubmitApk(SubmitApkState::WaitingDiffUrl {
+                    data,
+                }))
+                .await?;
+            if let Some(cid) = chat_id {
+                bot.send_message(
+                    cid,
+                    "🔗 Введите ссылку на изменения (например: <code>https://github.com/owner/example</code>):",
+                )
+                .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
+            }
+        }
+        SubmitApkState::WaitingDiffUrl { data } => {
+            dialogue
+                .update(DialogueState::SubmitApk(SubmitApkState::WaitingCover {
+                    data,
+                }))
+                .await?;
+            if let Some(cid) = chat_id {
+                bot.send_message(
+                    cid,
+                    "🖼️ Отправьте фото обложки:",
+                )
+                .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
+            }
+        }
+        SubmitApkState::WaitingCover { data } => {
+            dialogue
+                .update(DialogueState::SubmitApk(SubmitApkState::WaitingApkFiles {
+                    data,
+                }))
+                .await?;
+            if let Some(cid) = chat_id {
+                bot.send_message(
+                    cid,
+                    "📦 Отправьте файлы (<b>.apk, .zip, .7z</b>) документом.\nПо завершении отправьте <code>/done</code>:",
+                )
+                .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
+            }
+        }
+        SubmitApkState::WaitingTags { data } => {
+            dialogue
+                .update(DialogueState::SubmitApk(SubmitApkState::Confirm {
+                    data: data.clone(),
+                }))
+                .await?;
+            if let Some(cid) = chat_id {
+                crate::dialogue::submit_apk::send_confirm_card(bot, cid, &data).await?;
+            }
         }
         _ => {}
     }

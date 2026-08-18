@@ -172,11 +172,11 @@ pub async fn handle_suggest_flow(
                         msg.id(),
                         format!(
                             "📝 Введите описание репозитория (что это за инструмент) — оно будет показано администраторам и применится при одобрении.\n\
-                            Текущее: <i>{}</i>\n\n\
-                            Отправьте текст или <code>/skip</code>, чтобы оставить без описания:",
+                            Текущее: <i>{}</i>",
                             html_escape::encode_text(cur_desc.trim())
                         ),
                     )
+                    .reply_markup(crate::dialogue::suggest::skip_or_cancel_keyboard())
                     .parse_mode(ParseMode::Html)
                     .await;
             }
@@ -191,10 +191,35 @@ pub async fn handle_suggest_flow(
                     .edit_message_text(
                         msg.chat().id,
                         msg.id(),
-                        "🏷 Введите теги через пробел (например: <code>vpn android</code>)\nили отправьте <code>/skip</code>, чтобы оставить без тегов:",
+                        "🏷 Введите теги через пробел (например: <code>vpn android</code>):",
                     )
+                    .reply_markup(crate::dialogue::suggest::skip_or_cancel_keyboard())
                     .parse_mode(ParseMode::Html)
                     .await;
+            }
+            Ok(())
+        }
+        ("skip", SuggestState::WaitingDescription { data }) => {
+            dialogue
+                .update(DialogueState::Suggest(SuggestState::Confirm {
+                    data: data.clone(),
+                }))
+                .await?;
+            if let Some(msg) = &q.message {
+                let _ = bot.delete_message(msg.chat().id, msg.id()).await;
+                crate::dialogue::suggest::send_suggest_confirm(bot, msg.chat().id, &data).await?;
+            }
+            Ok(())
+        }
+        ("skip", SuggestState::WaitingTags { data }) => {
+            dialogue
+                .update(DialogueState::Suggest(SuggestState::Confirm {
+                    data: data.clone(),
+                }))
+                .await?;
+            if let Some(msg) = &q.message {
+                let _ = bot.delete_message(msg.chat().id, msg.id()).await;
+                crate::dialogue::suggest::send_suggest_confirm(bot, msg.chat().id, &data).await?;
             }
             Ok(())
         }

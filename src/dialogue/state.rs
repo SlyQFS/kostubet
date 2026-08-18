@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingApk {
     pub variant: String,
     pub file_id: String,
@@ -14,13 +14,13 @@ pub struct PendingApk {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SubmitApkData {
     pub is_new_app: bool,
     pub app_id: Option<i64>,
     pub slug: String,
     pub name: String,
     /// App-level description (what the app is). New submissions only.
-    #[serde(default)]
     pub description: Option<String>,
     pub version: String,
     pub title: Option<String>,
@@ -29,6 +29,7 @@ pub struct SubmitApkData {
     pub cover_image_file_id: Option<String>,
     pub apk_files: Vec<PendingApk>,
     pub tags: Vec<String>,
+    pub submitted_by_username: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,19 +70,20 @@ pub enum SubmitApkState {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct EditApkData {
     pub version_id: i64,
     pub app_name: String,
     pub version: String,
     /// App-level description loaded from the app; saved via `set_app_description`.
-    #[serde(default)]
     pub description: Option<String>,
     pub title: Option<String>,
     pub changelog: Option<String>,
     pub diff_url: Option<String>,
     pub cover_image_file_id: Option<String>,
     pub tags: Vec<String>,
+    pub submitted_by_username: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,12 +135,12 @@ pub enum AdminState {
 }
 
 /// Button-driven repository suggestion flow (`/suggest` and `start:suggest`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SuggestData {
     pub owner: String,
     pub name: String,
     /// Optional description proposed by the author (or `/skip`).
-    #[serde(default)]
     pub description: Option<String>,
     pub tags: Vec<String>,
 }

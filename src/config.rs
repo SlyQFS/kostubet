@@ -113,8 +113,6 @@ pub struct Config {
     #[serde(default = "default_true")]
     pub check_releases: bool,
     #[serde(default = "default_true")]
-    pub check_tags: bool,
-    #[serde(default = "default_true")]
     pub check_commits: bool,
     /// Post pre-releases (beta builds). Set POST_PRERELEASES=false to skip them.
     #[serde(default = "default_true")]
@@ -161,7 +159,6 @@ impl Config {
                 repos: Vec::new(),
                 admin_user_ids: Vec::new(),
                 check_releases: true,
-                check_tags: true,
                 check_commits: true,
                 post_prereleases: true,
                 dry_run: false,
@@ -231,11 +228,6 @@ impl Config {
         if let Ok(val) = env::var("CHECK_RELEASES") {
             let v = val.to_lowercase();
             config.check_releases = v == "1" || v == "true" || v == "yes";
-        }
-
-        if let Ok(val) = env::var("CHECK_TAGS") {
-            let v = val.to_lowercase();
-            config.check_tags = v == "1" || v == "true" || v == "yes";
         }
 
         if let Ok(val) = env::var("CHECK_COMMITS") {

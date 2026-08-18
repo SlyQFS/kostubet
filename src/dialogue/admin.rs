@@ -42,9 +42,7 @@ pub async fn handle_admin_message(
             let Some(repo) = RepoConfig::parse_ref(&text) else {
                 bot.send_message(
                     chat_id,
-                    "❌ Не удалось распознать репозиторий. Отправьте ссылку вида:\n\
-                    <code>https://github.com/owner/repo</code> или <code>owner/repo</code>\n\n\
-                    Или отправьте <code>/cancel</code> для отмены.",
+                    "❌ Отправьте ссылку вида: <code>https://github.com/owner/example</code> или <code>owner/example</code>",
                 )
                 .parse_mode(ParseMode::Html)
                 .await?;
@@ -108,14 +106,14 @@ pub async fn handle_admin_message(
             bot.send_message(
                 chat_id,
                 format!(
-                    "📦 Репозиторий <b>{}</b> найден.\n\nЧто сделать с его текущим релизом?",
+                    "📦 Репозиторий <b>{}</b> найден.\n\nЧто сделать с текущим релизом?",
                     repo_label
                 ),
             )
             .parse_mode(ParseMode::Html)
             .reply_markup(InlineKeyboardMarkup::new(vec![
                 vec![InlineKeyboardButton::callback(
-                    "📣 Запостить текущий релиз",
+                    "📣 Опубликовать релиз",
                     "adm:trackmode:post",
                 )],
                 vec![InlineKeyboardButton::callback(
@@ -201,7 +199,7 @@ pub async fn handle_admin_message(
 
             let tool_id = db
                 .tools()
-                .add_tool(&owner, &name, sender_id, description.as_deref())
+                .add_tool(&owner, &name, sender_id, description.as_deref(), None)
                 .await?;
             if !tags.is_empty() {
                 let _ = db
@@ -325,6 +323,12 @@ pub async fn handle_admin_message(
                 .log_action(sender_id, "изменил описание репозитория", &tool.full_name())
                 .await;
             dialogue.exit().await?;
+            let kb = InlineKeyboardMarkup::new(vec![
+                vec![
+                    InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:repopost:{}", tool_id)),
+                    InlineKeyboardButton::callback("📦 Репозиторий", format!("adm:repo:{}", tool_id)),
+                ],
+            ]);
             bot.send_message(
                 chat_id,
                 format!(
@@ -332,6 +336,7 @@ pub async fn handle_admin_message(
                     encode_text(&tool.full_name())
                 ),
             )
+            .reply_markup(kb)
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -357,6 +362,12 @@ pub async fn handle_admin_message(
                     .log_action(sender_id, "удалил описание приложения", &app.name)
                     .await;
                 dialogue.exit().await?;
+                let kb = InlineKeyboardMarkup::new(vec![
+                    vec![
+                        InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:apppost:{}", app_id)),
+                        InlineKeyboardButton::callback("📱 К приложениям", "adm:apps:0"),
+                    ],
+                ]);
                 bot.send_message(
                     chat_id,
                     format!(
@@ -364,6 +375,7 @@ pub async fn handle_admin_message(
                         encode_text(&app.name)
                     ),
                 )
+                .reply_markup(kb)
                 .parse_mode(ParseMode::Html)
                 .await?;
                 return Ok(());
@@ -392,6 +404,12 @@ pub async fn handle_admin_message(
                 .log_action(sender_id, "изменил описание приложения", &app.name)
                 .await;
             dialogue.exit().await?;
+            let kb = InlineKeyboardMarkup::new(vec![
+                vec![
+                    InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:apppost:{}", app_id)),
+                    InlineKeyboardButton::callback("📱 К приложениям", "adm:apps:0"),
+                ],
+            ]);
             bot.send_message(
                 chat_id,
                 format!(
@@ -399,6 +417,7 @@ pub async fn handle_admin_message(
                     encode_text(&app.name)
                 ),
             )
+            .reply_markup(kb)
             .parse_mode(ParseMode::Html)
             .await?;
         }

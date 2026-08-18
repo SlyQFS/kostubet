@@ -62,11 +62,9 @@ pub async fn handle_start_action(
                 .await?;
             bot.send_message(
                 chat_id,
-                "💡 <b>Предложить репозиторий</b>\n\n\
-                Отправьте ссылку на репозиторий GitHub:\n\
-                <code>https://github.com/owner/repo</code> — или просто <code>owner/repo</code>\n\n\
-                Отмена: <code>/cancel</code>",
+                "💡 Отправьте ссылку на репозиторий (например: <code>https://github.com/owner/example</code> или <code>owner/example</code>):",
             )
+            .reply_markup(crate::dialogue::suggest::cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }

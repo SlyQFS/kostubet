@@ -227,6 +227,10 @@ pub async fn handle_callback(
         return submit_flow::handle_submit_confirm_cancel(&bot, &q, &dialogue).await;
     }
 
+    if data == "submit_skip" {
+        return submit_flow::handle_submit_skip(&bot, &q, &dialogue).await;
+    }
+
     // Resume prompt when /submitapk is invoked mid-dialogue
     if let Some(action) = data.strip_prefix("submitresume:") {
         return submit_flow::handle_submit_resume(&bot, &q, action, &dialogue).await;
@@ -247,8 +251,17 @@ pub async fn handle_callback(
 
     // 4. Admin Panel (adm:*) and public catalog (pub:apps:* / appcard:*)
     if let Some(rest) = data.strip_prefix("adm:") {
-        return panel::handle_panel_callback(&bot, &q, rest, &dialogue, &db, user_id, target_chat_id)
-            .await;
+        return panel::handle_panel_callback(
+            &bot,
+            &q,
+            rest,
+            &dialogue,
+            &db,
+            user_id,
+            target_chat_id,
+            target_thread_id,
+        )
+        .await;
     }
 
     if let Some(p) = data.strip_prefix("pub:apps:") {

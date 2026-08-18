@@ -92,19 +92,40 @@ pub fn generate_slug(name: &str, user_id: i64) -> String {
 }
 
 pub fn variant_selection_keyboard() -> InlineKeyboardMarkup {
-    let variants = ["universal", "arm64-v8a", "armeabi-v7a", "x86_64", "x86"];
+    let variants = [
+        ("universal", "universal"),
+        ("archive", "archive"),
+        ("arm64-v8a", "arm64-v8a"),
+        ("armeabi-v7a", "armeabi-v7a"),
+        ("x86_64", "x86_64"),
+        ("x86", "x86"),
+    ];
     let mut rows = Vec::new();
-    for v in variants {
-        rows.push(vec![InlineKeyboardButton::callback(
-            v,
-            format!("variant_select:{}", v),
-        )]);
+    for chunk in variants.chunks(2) {
+        let row = chunk
+            .iter()
+            .map(|(label, v)| InlineKeyboardButton::callback(*label, format!("variant_select:{}", v)))
+            .collect();
+        rows.push(row);
     }
     rows.push(vec![InlineKeyboardButton::callback(
-        "❌ Отмена",
+        "❌ Отменить",
         "submit_confirm:cancel",
     )]);
     InlineKeyboardMarkup::new(rows)
+}
+
+pub fn skip_or_cancel_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("⏩ Пропустить", "submit_skip"),
+        InlineKeyboardButton::callback("❌ Отменить", "submit_confirm:cancel"),
+    ]])
+}
+
+pub fn cancel_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("❌ Отменить", "submit_confirm:cancel"),
+    ]])
 }
 
 #[tracing::instrument(skip(bot, dialogue, db))]
@@ -140,8 +161,9 @@ pub async fn handle_submit_message(
             if text.is_empty() {
                 bot.send_message(
                     chat_id,
-                    "⚠️ Название не может быть пустым. Введите название приложения:",
+                    "⚠️ Введите название (например: <i>example</i>):",
                 )
+                .reply_markup(cancel_keyboard())
                 .await?;
                 return Ok(());
             }
@@ -159,15 +181,15 @@ pub async fn handle_submit_message(
 
                 let kb = InlineKeyboardMarkup::new(vec![
                     vec![InlineKeyboardButton::callback(
-                        format!("🔄 Это обновление «{}»", existing.name),
+                        format!("🔄 Обновление «{}»", existing.name),
                         format!("submit_app:{}", existing.slug),
                     )],
                     vec![InlineKeyboardButton::callback(
-                        "✏️ Ввести другое название",
+                        "✏️ Другое название",
                         "submitslug:rename",
                     )],
                     vec![InlineKeyboardButton::callback(
-                        "❌ Отмена",
+                        "❌ Отменить",
                         "submit_confirm:cancel",
                     )],
                 ]);
@@ -175,10 +197,9 @@ pub async fn handle_submit_message(
                 bot.send_message(
                     chat_id,
                     format!(
-                        "⚠️ Приложение с похожим названием уже существует в каталоге:\n\
+                        "⚠️ Приложение уже существует в каталоге:\n\
                         • <b>{}</b> (<code>{}</code>)\n\n\
-                        Если вы выпускаете новую версию именно этого приложения — выберите «Это обновление».\n\
-                        Если это другое приложение — введите другое название.",
+                        Выберите действие:",
                         encode_text(&existing.name),
                         encode_text(&existing.slug),
                     ),
@@ -202,6 +223,7 @@ pub async fn handle_submit_message(
                 cover_image_file_id: None,
                 apk_files: Vec::new(),
                 tags: Vec::new(),
+                submitted_by_username: msg.from.as_ref().and_then(|u| u.username.clone()),
             });
 
             dialogue
@@ -212,9 +234,9 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "📝 Введите описание приложения (что это за приложение — оно будет показываться в его карточках)\n\
-                или отправьте <code>/skip</code>:",
+                "📝 Введите описание (например: <i>example</i>):",
             )
+            .reply_markup(skip_or_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -223,8 +245,9 @@ pub async fn handle_submit_message(
                 if let Err(err) = crate::dialogue::validate_description(text) {
                     bot.send_message(
                         chat_id,
-                        format!("{}\n\nПовторите ввод или отправьте <code>/skip</code>.", err),
+                        format!("{}\n\nПовторите ввод или нажмите <b>Пропустить</b>.", err),
                     )
+                    .reply_markup(skip_or_cancel_keyboard())
                     .parse_mode(ParseMode::Html)
                     .await?;
                     return Ok(());
@@ -240,14 +263,17 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "📦 Введите номер версии приложения (например, <code>1.0.0</code>):",
+                "📦 Введите версию (например: <code>1.0.0</code>):",
             )
+            .reply_markup(cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
         SubmitApkState::WaitingVersion { mut data } => {
             if text.is_empty() {
-                bot.send_message(chat_id, "⚠️ Версия не может быть пустой. Введите версию:")
+                bot.send_message(chat_id, "⚠️ Введите версию (например: <code>1.0.0</code>):")
+                    .reply_markup(cancel_keyboard())
+                    .parse_mode(ParseMode::Html)
                     .await?;
                 return Ok(());
             }
@@ -261,8 +287,9 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "📌 Введите заголовок карточки (краткий анонс) или отправьте <code>/skip</code>, чтобы пропустить:",
+                "📌 Введите заголовок (например: <i>example</i>):",
             )
+            .reply_markup(skip_or_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -279,8 +306,9 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "📝 Введите список изменений (Changelog / описание) или отправьте <code>/skip</code>:",
+                "📝 Введите список изменений (например: <i>example</i>):",
             )
+            .reply_markup(skip_or_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -297,8 +325,9 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "🔗 Отправьте ссылку на изменения (GitHub Diff / Commit URL) или <code>/skip</code>:",
+                "🔗 Введите ссылку на изменения (например: <code>https://github.com/owner/example</code>):",
             )
+            .reply_markup(skip_or_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -315,8 +344,9 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "🖼️ Отправьте обложку / скриншот приложения (фотографией) или <code>/skip</code>:",
+                "🖼️ Отправьте фото обложки:",
             )
+            .reply_markup(skip_or_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -328,8 +358,9 @@ pub async fn handle_submit_message(
             } else if text != "/skip" {
                 bot.send_message(
                     chat_id,
-                    "⚠️ Отправьте фотографию как обложку или команду <code>/skip</code>, чтобы продолжить без обложки:",
+                    "⚠️ Отправьте фото или нажмите <b>Пропустить</b>:",
                 )
+                .reply_markup(skip_or_cancel_keyboard())
                 .parse_mode(ParseMode::Html)
                 .await?;
                 return Ok(());
@@ -343,9 +374,9 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "📦 Отправьте один или несколько <b>.apk файлов</b> документом (до 2 ГБ — ограничение Telegram на документы).\n\
-                Когда закончите загрузку всех файлов, отправьте команду <code>/done</code>:",
+                "📦 Отправьте файлы (<b>.apk, .zip, .7z</b>) документом.\nПо завершении отправьте <code>/done</code>:",
             )
+            .reply_markup(cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -354,8 +385,9 @@ pub async fn handle_submit_message(
                 if data.apk_files.is_empty() {
                     bot.send_message(
                         chat_id,
-                        "⚠️ Вы еще не загрузили ни одного .apk файла! Отправьте хотя бы один .apk файл или <code>/cancel</code>.",
+                        "⚠️ Загрузите хотя бы один файл (.apk, .zip, .7z) или отмените заявку:",
                     )
+                    .reply_markup(cancel_keyboard())
                     .parse_mode(ParseMode::Html)
                     .await?;
                     return Ok(());
@@ -369,8 +401,9 @@ pub async fn handle_submit_message(
 
                 bot.send_message(
                     chat_id,
-                    "🏷️ Введите теги через пробел или запятую (например, <code>#vpn #android #free</code>) или отправьте <code>/skip</code>:",
+                    "🏷️ Введите теги (например: <code>#example</code>):",
                 )
+                .reply_markup(skip_or_cancel_keyboard())
                 .parse_mode(ParseMode::Html)
                 .await?;
                 return Ok(());
@@ -378,28 +411,34 @@ pub async fn handle_submit_message(
 
             if let Some(doc) = msg.document() {
                 let file_name = doc.file_name.clone().unwrap_or_default();
-                if !file_name.to_lowercase().ends_with(".apk") {
+                let f_lower = file_name.to_lowercase();
+                let is_supported = f_lower.ends_with(".apk")
+                    || f_lower.ends_with(".zip")
+                    || f_lower.ends_with(".7z");
+
+                if !is_supported {
                     bot.send_message(
                         chat_id,
-                        "⚠️ Файл должен иметь расширение <b>.apk</b>. Пожалуйста, отправьте .apk файл документом:",
+                        "⚠️ Файл должен быть <b>.apk, .zip, .7z</b>. Отправьте файл документом:",
                     )
+                    .reply_markup(cancel_keyboard())
                     .parse_mode(ParseMode::Html)
                     .await?;
                     return Ok(());
                 }
 
                 // Telegram document upload limit (2 GB). The bot never re-uploads
-                // the APK itself — it stores the file_id and resends by it, which
+                // the file itself — it stores the file_id and resends by it, which
                 // has no size limit, so only the user-side upload limit applies.
-                const MAX_APK_SIZE: u32 = 2 * 1024 * 1024 * 1024; // 2 GB
-                if doc.file.size > MAX_APK_SIZE {
+                const MAX_FILE_SIZE: u32 = 2 * 1024 * 1024 * 1024; // 2 GB
+                if doc.file.size > MAX_FILE_SIZE {
                     let size_gb = (doc.file.size as f64) / (1024.0 * 1024.0 * 1024.0);
                     bot.send_message(
                         chat_id,
                         format!(
                             "⚠️ <b>Размер файла превышает лимит 2 ГБ ({:.2} ГБ)!</b>\n\n\
                             Telegram не позволяет отправлять документы больше 2 ГБ.\n\
-                            Пожалуйста, оптимизируйте размер APK или загрузите файл вручную.",
+                            Пожалуйста, оптимизируйте размер файла или загрузите его вручную.",
                             size_gb
                         ),
                     )
@@ -432,7 +471,7 @@ pub async fn handle_submit_message(
                     bot.send_message(
                         chat_id,
                         format!(
-                            "✅ Файл <code>{}</code> добавлен (архитектура: <b>{}</b>).\nВсего файлов: <b>{}</b>.\n\nОтправьте следующий .apk файл или команду <code>/done</code>.",
+                            "✅ Файл <code>{}</code> добавлен (тип/архитектура: <b>{}</b>).\nВсего файлов: <b>{}</b>.\n\nОтправьте следующий файл (.apk, .zip, .7z) или команду <code>/done</code>.",
                             encode_text(&file_name),
                             variant,
                             count
@@ -460,7 +499,7 @@ pub async fn handle_submit_message(
                     bot.send_message(
                         chat_id,
                         format!(
-                            "❓ Не удалось автоматически определить архитектуру для файла <code>{}</code>.\nВыберите архитектуру:",
+                            "❓ Выберите тип/архитектуру для <code>{}</code>:",
                             encode_text(&file_name)
                         ),
                     )
@@ -471,8 +510,9 @@ pub async fn handle_submit_message(
             } else {
                 bot.send_message(
                     chat_id,
-                    "⚠️ Отправьте <b>.apk файл</b> как документ (до 2 ГБ) или команду <code>/done</code>, когда все файлы загружены.",
+                    "⚠️ Отправьте <b>файл (.apk, .zip, .7z)</b> документом или команду <code>/done</code>:",
                 )
+                .reply_markup(cancel_keyboard())
                 .parse_mode(ParseMode::Html)
                 .await?;
             }
@@ -480,8 +520,9 @@ pub async fn handle_submit_message(
         SubmitApkState::ResolvingVariant { .. } => {
             bot.send_message(
                 chat_id,
-                "ℹ️ Пожалуйста, выберите архитектуру кнопкой выше или отправьте <code>/cancel</code> для отмены.",
+                "ℹ️ Выберите тип кнопкой выше или нажмите <b>❌ Отменить</b>.",
             )
+            .reply_markup(cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -495,46 +536,63 @@ pub async fn handle_submit_message(
                 data.tags = tags;
             }
 
-            let post = PostData {
-                title: format!("{} v{}", data.name, data.version),
-                description: data.description.clone(),
-                body: data.changelog.clone(),
-                diff_url: data.diff_url.clone(),
-                tags: data.tags.clone(),
-                cover_image: data.cover_image_file_id.clone(),
-                download_buttons: Vec::new(),
-            };
-
-            let preview_text = render_post_text(&post);
-            let confirm_kb = InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("🚀 Отправить", "submit_confirm:send"),
-                InlineKeyboardButton::callback("❌ Отмена", "submit_confirm:cancel"),
-            ]]);
+            if data.submitted_by_username.is_none() {
+                data.submitted_by_username = msg.from.as_ref().and_then(|u| u.username.clone());
+            }
 
             dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::Confirm { data }))
+                .update(DialogueState::SubmitApk(SubmitApkState::Confirm {
+                    data: data.clone(),
+                }))
                 .await?;
 
-            bot.send_message(
-                chat_id,
-                format!(
-                    "👀 <b>Предпросмотр карточки релиза:</b>\n\n{}\n\n<i>ℹ️ При публикации APK-файлы будут отправлены в чат сразу после карточки.</i>\n\n━━━━━━━━━━━━━━━\nВсё верно?",
-                    preview_text
-                ),
-            )
-            .parse_mode(ParseMode::Html)
-            .reply_markup(confirm_kb)
-            .await?;
+            send_confirm_card(&bot, chat_id, &data).await?;
         }
         SubmitApkState::Confirm { .. } => {
             bot.send_message(
                 chat_id,
-                "ℹ️ Подтвердите отправку кнопкой <b>🚀 Отправить</b> или отмените кнопкой <b>❌ Отмена</b>.",
+                "ℹ️ Нажмите <b>🚀 Отправить</b> или <b>❌ Отменить</b>.",
             )
             .parse_mode(ParseMode::Html)
             .await?;
         }
     }
+
+    Ok(())
+}
+
+pub async fn send_confirm_card(
+    bot: &Bot,
+    chat_id: ChatId,
+    data: &SubmitApkData,
+) -> Result<()> {
+    let post = PostData {
+        title: format!("{} v{}", data.name, data.version),
+        description: data.description.clone(),
+        body: data.changelog.clone(),
+        diff_url: data.diff_url.clone(),
+        tags: data.tags.clone(),
+        cover_image: data.cover_image_file_id.clone(),
+        download_buttons: Vec::new(),
+        suggested_by: data.submitted_by_username.clone(),
+    };
+
+    let preview_text = render_post_text(&post);
+    let confirm_kb = InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("🚀 Отправить", "submit_confirm:send"),
+        InlineKeyboardButton::callback("❌ Отменить", "submit_confirm:cancel"),
+    ]]);
+
+    bot.send_message(
+        chat_id,
+        format!(
+            "👀 <b>Предпросмотр:</b>\n\n{}\n\nВсё верно?",
+            preview_text
+        ),
+    )
+    .parse_mode(ParseMode::Html)
+    .reply_markup(confirm_kb)
+    .await?;
 
     Ok(())
 }

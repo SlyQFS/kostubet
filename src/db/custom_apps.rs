@@ -31,6 +31,7 @@ pub struct CustomAppVersionRecord {
     pub diff_url: Option<String>,
     pub cover_image_file_id: Option<String>,
     pub submitted_by: i64,
+    pub submitted_by_username: Option<String>,
     pub status: String,
     #[allow(dead_code)]
     pub reviewed_by: Option<i64>,
@@ -193,14 +194,15 @@ impl<'a> CustomAppsRepo<'a> {
         diff_url: Option<&str>,
         cover_image_file_id: Option<&str>,
         submitted_by: i64,
+        submitted_by_username: Option<&str>,
     ) -> Result<i64> {
         let res = sqlx::query(
             r#"
             INSERT INTO custom_app_versions (
                 app_id, version, title, changelog, diff_url,
-                cover_image_file_id, submitted_by, status, created_at
+                cover_image_file_id, submitted_by, submitted_by_username, status, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
             "#,
         )
         .bind(app_id)
@@ -210,6 +212,7 @@ impl<'a> CustomAppsRepo<'a> {
         .bind(diff_url)
         .bind(cover_image_file_id)
         .bind(submitted_by)
+        .bind(submitted_by_username)
         .execute(self.pool)
         .await
         .context("Failed to create custom app version")?;
@@ -278,7 +281,7 @@ impl<'a> CustomAppsRepo<'a> {
         let row = sqlx::query(
             r#"
             SELECT id, app_id, version, title, changelog, diff_url,
-                   cover_image_file_id, submitted_by, status, reviewed_by,
+                   cover_image_file_id, submitted_by, submitted_by_username, status, reviewed_by,
                    reviewed_at, published_message_id, created_at
             FROM custom_app_versions
             WHERE id = ?
@@ -298,6 +301,7 @@ impl<'a> CustomAppsRepo<'a> {
             diff_url: r.get("diff_url"),
             cover_image_file_id: r.get("cover_image_file_id"),
             submitted_by: r.get("submitted_by"),
+            submitted_by_username: r.get("submitted_by_username"),
             status: r.get("status"),
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
@@ -310,7 +314,7 @@ impl<'a> CustomAppsRepo<'a> {
         let row = sqlx::query(
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
-                   v.cover_image_file_id, v.submitted_by, v.status, v.reviewed_by,
+                   v.cover_image_file_id, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
                    v.reviewed_at, v.published_message_id, v.created_at
             FROM custom_app_versions v
             JOIN custom_apps a ON a.current_version_id = v.id
@@ -331,6 +335,7 @@ impl<'a> CustomAppsRepo<'a> {
             diff_url: r.get("diff_url"),
             cover_image_file_id: r.get("cover_image_file_id"),
             submitted_by: r.get("submitted_by"),
+            submitted_by_username: r.get("submitted_by_username"),
             status: r.get("status"),
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
@@ -349,7 +354,7 @@ impl<'a> CustomAppsRepo<'a> {
         let row = sqlx::query(
             r#"
             SELECT id, app_id, version, title, changelog, diff_url,
-                   cover_image_file_id, submitted_by, status, reviewed_by,
+                   cover_image_file_id, submitted_by, submitted_by_username, status, reviewed_by,
                    reviewed_at, published_message_id, created_at
             FROM custom_app_versions
             WHERE app_id = ?
@@ -371,6 +376,7 @@ impl<'a> CustomAppsRepo<'a> {
             diff_url: r.get("diff_url"),
             cover_image_file_id: r.get("cover_image_file_id"),
             submitted_by: r.get("submitted_by"),
+            submitted_by_username: r.get("submitted_by_username"),
             status: r.get("status"),
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
@@ -413,7 +419,7 @@ impl<'a> CustomAppsRepo<'a> {
         let rows = sqlx::query(
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
-                   v.cover_image_file_id, v.submitted_by, v.status, v.reviewed_by,
+                   v.cover_image_file_id, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
                    v.reviewed_at, v.published_message_id, v.created_at,
                    a.slug, a.name, a.description, a.current_version_id, a.created_by, a.created_at as app_created_at
             FROM custom_app_versions v
@@ -438,6 +444,7 @@ impl<'a> CustomAppsRepo<'a> {
                     diff_url: r.get("diff_url"),
                     cover_image_file_id: r.get("cover_image_file_id"),
                     submitted_by: r.get("submitted_by"),
+                    submitted_by_username: r.get("submitted_by_username"),
                     status: r.get("status"),
                     reviewed_by: r.get("reviewed_by"),
                     reviewed_at: r.get("reviewed_at"),
@@ -477,7 +484,7 @@ impl<'a> CustomAppsRepo<'a> {
         let rows = sqlx::query(
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
-                   v.cover_image_file_id, v.submitted_by, v.status, v.reviewed_by,
+                   v.cover_image_file_id, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
                    v.reviewed_at, v.published_message_id, v.created_at,
                    a.slug, a.name, a.description, a.current_version_id, a.created_by, a.created_at as app_created_at
             FROM custom_app_versions v
@@ -504,6 +511,7 @@ impl<'a> CustomAppsRepo<'a> {
                     diff_url: r.get("diff_url"),
                     cover_image_file_id: r.get("cover_image_file_id"),
                     submitted_by: r.get("submitted_by"),
+                    submitted_by_username: r.get("submitted_by_username"),
                     status: r.get("status"),
                     reviewed_by: r.get("reviewed_by"),
                     reviewed_at: r.get("reviewed_at"),

@@ -59,7 +59,6 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                     tool.etag.as_deref(),
                                     tool.last_release.as_deref(),
                                     config.check_releases,
-                                    config.check_tags,
                                     config.check_commits,
                                     config.post_prereleases,
                                 )
@@ -84,10 +83,12 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                         .apk_assets
                                         .into_iter()
                                         .map(|a| {
-                                            (
-                                                format!("⬇️ Скачать ({})", a.variant),
-                                                DownloadTarget::Url(a.url),
-                                            )
+                                            let label = if a.variant == "release" {
+                                                "⬇️ Скачать релиз".to_string()
+                                            } else {
+                                                format!("⬇️ Скачать ({})", a.variant)
+                                            };
+                                            (label, DownloadTarget::Url(a.url))
                                         })
                                         .collect();
 
@@ -102,6 +103,7 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                         tags: tag_names,
                                         cover_image: None,
                                         download_buttons,
+                                        suggested_by: tool.suggested_by.clone(),
                                     };
 
                                     match send_post(

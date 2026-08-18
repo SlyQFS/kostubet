@@ -8,7 +8,9 @@ use crate::db::tags::ItemType;
 use crate::db::Database;
 use crate::dialogue::{AdminState, DialogueState};
 use crate::dialogue::BotDialogue;
-use crate::services::render::build_apk_post_data;
+use crate::services::render::{
+    build_apk_post_data, send_apk_documents, send_post, DownloadTarget, PostData,
+};
 use crate::strings::ACCESS_DENIED;
 use anyhow::Result;
 use html_escape::encode_text;
@@ -236,13 +238,14 @@ async fn repo_detail_view(db: &Database, tool_id: i64) -> Result<(String, Inline
     );
 
     let kb = InlineKeyboardMarkup::new(vec![
+        vec![btn("📢 Опубликовать", format!("adm:repopost:{}", tool.id))],
         vec![
             btn("📝 Описание", format!("adm:repodesc:{}", tool.id)),
             btn("🏷 Теги", format!("adm:repotags:{}", tool.id)),
         ],
         vec![
-            btn("🗑 Убрать", format!("adm:repountrack:{}", tool.id)),
-            btn("⬅️ К списку", "adm:repos:0"),
+            btn("🗑 Удалить", format!("adm:repountrack:{}", tool.id)),
+            btn("⬅️ Назад", "adm:repos:0"),
         ],
     ]);
 
@@ -256,7 +259,7 @@ async fn repo_untrack_confirm_view(
     let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
         return Ok((
             "⚠️ Репозиторий не найден.".to_string(),
-            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ К списку", "adm:repos:0")]]),
+            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ Назад", "adm:repos:0")]]),
         ));
     };
 
@@ -268,7 +271,7 @@ async fn repo_untrack_confirm_view(
     let kb = InlineKeyboardMarkup::new(vec![
         vec![
             btn("✅ Да, убрать", format!("adm:repountrackok:{}", tool.id)),
-            btn("❌ Отмена", format!("adm:repo:{}", tool.id)),
+            btn("❌ Отменить", format!("adm:repo:{}", tool.id)),
         ],
     ]);
 
@@ -279,7 +282,7 @@ async fn repo_tags_view(db: &Database, tool_id: i64) -> Result<(String, InlineKe
     let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
         return Ok((
             "⚠️ Репозиторий не найден.".to_string(),
-            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ К списку", "adm:repos:0")]]),
+            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ Назад", "adm:repos:0")]]),
         ));
     };
 
@@ -308,7 +311,7 @@ async fn repo_tags_view(db: &Database, tool_id: i64) -> Result<(String, InlineKe
         format!("adm:repotagadd:{}", tool.id),
     )]);
     rows.push(vec![btn(
-        "⬅️ Назад к репозиторию",
+        "⬅️ Назад",
         format!("adm:repo:{}", tool.id),
     )]);
 
@@ -343,7 +346,7 @@ async fn tags_page_view(db: &Database, page: usize) -> Result<(String, InlineKey
     rows.extend(nav_row("adm:tags", page, pages));
     rows.push(vec![
         btn("➕ Новый тег", "adm:tagadd"),
-        btn("⬅️ В панель", "adm:root"),
+        btn("⬅️ Назад", "adm:root"),
     ]);
 
     Ok((text, InlineKeyboardMarkup::new(rows)))
@@ -354,7 +357,7 @@ async fn tag_detail_view(db: &Database, tag_id: i64) -> Result<(String, InlineKe
     let Some(tag) = tags.iter().find(|t| t.id == tag_id) else {
         return Ok((
             "⚠️ Тег не найден.".to_string(),
-            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ К тегам", "adm:tags:0")]]),
+            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ Назад", "adm:tags:0")]]),
         ));
     };
 
@@ -387,7 +390,7 @@ async fn tag_detail_view(db: &Database, tag_id: i64) -> Result<(String, InlineKe
 
     let kb = InlineKeyboardMarkup::new(vec![
         vec![btn("🗑 Удалить тег", format!("adm:tagdel:{}", tag.id))],
-        vec![btn("⬅️ К тегам", "adm:tags:0")],
+        vec![btn("⬅️ Назад", "adm:tags:0")],
     ]);
 
     Ok((text, kb))
@@ -398,7 +401,7 @@ async fn tag_delete_confirm_view(db: &Database, tag_id: i64) -> Result<(String, 
     let Some(tag) = tags.iter().find(|t| t.id == tag_id) else {
         return Ok((
             "⚠️ Тег не найден.".to_string(),
-            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ К тегам", "adm:tags:0")]]),
+            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ Назад", "adm:tags:0")]]),
         ));
     };
 
@@ -409,7 +412,7 @@ async fn tag_delete_confirm_view(db: &Database, tag_id: i64) -> Result<(String, 
 
     let kb = InlineKeyboardMarkup::new(vec![vec![
         btn("✅ Да, удалить", format!("adm:tagdelok:{}", tag.id)),
-        btn("❌ Отмена", format!("adm:tag:{}", tag.id)),
+        btn("❌ Отменить", format!("adm:tag:{}", tag.id)),
     ]]);
 
     Ok((text, kb))
@@ -426,7 +429,7 @@ async fn pending_page_view(
 
     if total == 0 {
         let text = "✅ Нет активных заявок на модерацию.".to_string();
-        let kb = InlineKeyboardMarkup::new(vec![vec![btn("⬅️ В панель", "adm:root")]]);
+        let kb = InlineKeyboardMarkup::new(vec![vec![btn("⬅️ Назад", "adm:root")]]);
         return Ok((text, kb));
     }
 
@@ -473,12 +476,16 @@ async fn pending_page_view(
                 ]);
             }
             Item::Apk(ver, app) => {
+                let author = match &ver.submitted_by_username {
+                    Some(u) => format!("@{}", encode_text(u)),
+                    None => format!("<code>{}</code>", ver.submitted_by),
+                };
                 text.push_str(&format!(
-                    "\n\n📱 #{} <b>{}</b> v{} — <code>{}</code> <code>[{}]</code>",
+                    "\n\n📱 #{} <b>{}</b> v{} — {} <code>[{}]</code>",
                     ver.id,
                     encode_text(&app.name),
                     encode_text(&ver.version),
-                    ver.submitted_by,
+                    author,
                     ver.created_at
                 ));
                 rows.push(vec![
@@ -590,13 +597,14 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
             .unwrap_or_default();
         text.push_str(&format!("\n• <b>{}</b>{}", encode_text(&app.name), ver_str));
         rows.push(vec![
+            btn("📢", format!("adm:apppost:{}", app.id)),
             btn("📝", format!("adm:appdesc:{}", app.id)),
             btn(format!("🗑 {}{}", app.name, ver_str), format!("adm:appdel:{}", app.id)),
         ]);
     }
 
     rows.extend(nav_row("adm:apps", page, pages));
-    rows.push(vec![btn("⬅️ В панель", "adm:root")]);
+    rows.push(vec![btn("⬅️ Назад", "adm:root")]);
 
     Ok((text, InlineKeyboardMarkup::new(rows)))
 }
@@ -608,7 +616,7 @@ async fn app_delete_confirm_view(
     let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
         return Ok((
             "⚠️ Приложение не найдено.".to_string(),
-            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ К приложениям", "adm:apps:0")]]),
+            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ Назад", "adm:apps:0")]]),
         ));
     };
 
@@ -622,7 +630,7 @@ async fn app_delete_confirm_view(
 
     let kb = InlineKeyboardMarkup::new(vec![vec![
         btn("✅ Да, удалить", format!("adm:appdelok:{}", app.id)),
-        btn("❌ Отмена", "adm:apps:0"),
+        btn("❌ Отменить", "adm:apps:0"),
     ]]);
 
     Ok((text, kb))
@@ -711,6 +719,7 @@ pub async fn handle_panel_callback(
     db: &Database,
     user_id: i64,
     target_chat_id: i64,
+    target_thread_id: Option<i64>,
 ) -> Result<()> {
     if rest == "noop" {
         return Ok(());
@@ -792,6 +801,206 @@ pub async fn handle_panel_callback(
                 )
                 .parse_mode(ParseMode::Html)
                 .await;
+        }
+        return Ok(());
+    }
+
+    if let Some(id_str) = rest.strip_prefix("repopost:") {
+        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
+            if let Some(msg) = &q.message {
+                bot.send_message(msg.chat().id, "⚠️ Репозиторий не найден.").await?;
+            }
+            return Ok(());
+        };
+
+        let _ = bot
+            .answer_callback_query(q.id.clone())
+            .text("⏳ Запрашиваем релиз с GitHub...")
+            .await;
+
+        let Some(client) = crate::services::github::global() else {
+            if let Some(msg) = &q.message {
+                bot.send_message(msg.chat().id, "❌ Клиент GitHub не инициализирован.").await?;
+            }
+            return Ok(());
+        };
+
+        match client.check_repo(&tool.owner, &tool.repo, None, None, true, false, true).await {
+            Ok(crate::services::github::CheckResult::NewUpdate(update)) => {
+                let tags = db
+                    .tags()
+                    .get_tags_for_item(ItemType::Tool, tool.id)
+                    .await
+                    .unwrap_or_default();
+                let tag_names: Vec<String> = tags.into_iter().map(|t| t.name).collect();
+
+                let download_buttons: Vec<(String, DownloadTarget)> = update
+                    .apk_assets
+                    .into_iter()
+                    .map(|a| {
+                        let label = if a.variant == "release" {
+                            "⬇️ Скачать релиз".to_string()
+                        } else {
+                            format!("⬇️ Скачать ({})", a.variant)
+                        };
+                        (label, DownloadTarget::Url(a.url))
+                    })
+                    .collect();
+
+                let post = PostData {
+                    title: format!("{}/{} • {}", tool.owner, tool.repo, update.title),
+                    description: tool.description.clone(),
+                    body: update.body,
+                    diff_url: Some(update.url),
+                    tags: tag_names,
+                    cover_image: None,
+                    download_buttons,
+                    suggested_by: tool.suggested_by.clone(),
+                };
+
+                match send_post(bot, target_chat_id, target_thread_id, &post).await {
+                    Ok(_) => {
+                        let _ = db
+                            .audit()
+                            .log_action(
+                                user_id,
+                                "повторно опубликовал карточку репозитория",
+                                &tool.full_name(),
+                            )
+                            .await;
+                        if let Some(msg) = &q.message {
+                            bot.send_message(
+                                msg.chat().id,
+                                format!(
+                                    "✅ Карточка для <b>{}</b> успешно опубликована в канал!",
+                                    encode_text(&tool.full_name())
+                                ),
+                            )
+                            .parse_mode(ParseMode::Html)
+                            .await?;
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(msg) = &q.message {
+                            bot.send_message(
+                                msg.chat().id,
+                                format!("❌ Ошибка при отправке карточки: {}", e),
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+            Ok(crate::services::github::CheckResult::RepoNotFound) => {
+                if let Some(msg) = &q.message {
+                    bot.send_message(
+                        msg.chat().id,
+                        format!(
+                            "❌ Репозиторий <b>{}</b> не найден на GitHub (404).",
+                            encode_text(&tool.full_name())
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                }
+            }
+            Ok(_) => {
+                if let Some(msg) = &q.message {
+                    bot.send_message(
+                        msg.chat().id,
+                        format!(
+                            "⚠️ У репозитория <b>{}</b> нет доступных релизов.",
+                            encode_text(&tool.full_name())
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                }
+            }
+            Err(e) => {
+                if let Some(msg) = &q.message {
+                    bot.send_message(msg.chat().id, format!("❌ Ошибка GitHub API: {}", e))
+                        .await?;
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    if let Some(id_str) = rest.strip_prefix("apppost:") {
+        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+            if let Some(msg) = &q.message {
+                bot.send_message(msg.chat().id, "⚠️ Приложение не найдено.").await?;
+            }
+            return Ok(());
+        };
+
+        let Some(ver) = db.custom_apps().get_current_version(app.id).await? else {
+            if let Some(msg) = &q.message {
+                bot.send_message(msg.chat().id, "⚠️ У приложения нет опубликованных версий.").await?;
+            }
+            return Ok(());
+        };
+
+        let tags = db
+            .tags()
+            .get_tags_for_item(ItemType::CustomApp, app.id)
+            .await
+            .unwrap_or_default();
+        let tag_names: Vec<String> = tags.into_iter().map(|t| t.name).collect();
+
+        let post = build_apk_post_data(
+            &app.name,
+            &ver.version,
+            app.description.clone(),
+            ver.changelog.clone(),
+            ver.diff_url.clone(),
+            ver.cover_image_file_id.clone(),
+            tag_names,
+            ver.submitted_by_username.clone(),
+        );
+
+        match send_post(bot, target_chat_id, target_thread_id, &post).await {
+            Ok(_) => {
+                let ver_files = db.custom_apps().get_apk_files(ver.id).await.unwrap_or_default();
+                if !ver_files.is_empty() {
+                    let _ = send_apk_documents(
+                        bot,
+                        target_chat_id,
+                        target_thread_id,
+                        &ver_files,
+                        &app.name,
+                        &ver.version,
+                    )
+                    .await;
+                }
+                let _ = db
+                    .audit()
+                    .log_action(user_id, "повторно опубликовал приложение", &app.name)
+                    .await;
+                if let Some(msg) = &q.message {
+                    bot.send_message(
+                        msg.chat().id,
+                        format!(
+                            "✅ Карточка приложения <b>{}</b> успешно опубликована в канал!",
+                            encode_text(&app.name)
+                        ),
+                    )
+                    .parse_mode(ParseMode::Html)
+                    .await?;
+                }
+            }
+            Err(e) => {
+                if let Some(msg) = &q.message {
+                    bot.send_message(
+                        msg.chat().id,
+                        format!("❌ Ошибка при отправке карточки: {}", e),
+                    )
+                    .await?;
+                }
+            }
         }
         return Ok(());
     }
@@ -1166,6 +1375,7 @@ pub async fn handle_appcard_callback(
         ver.diff_url.clone(),
         ver.cover_image_file_id.clone(),
         tags,
+        ver.submitted_by_username.clone(),
     );
 
     crate::services::render::send_post(bot, chat_id.0, None, &post).await?;

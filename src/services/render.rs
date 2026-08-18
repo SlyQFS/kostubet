@@ -26,6 +26,8 @@ pub struct PostData {
     pub tags: Vec<String>,
     pub cover_image: Option<String>, // file_id or URL
     pub download_buttons: Vec<(String, DownloadTarget)>,
+    /// Optional username or handle of the user who proposed/submitted the release.
+    pub suggested_by: Option<String>,
 }
 
 /// Helper function to construct unified `PostData` for custom APK releases.
@@ -39,6 +41,7 @@ pub fn build_apk_post_data(
     diff_url: Option<String>,
     cover_image: Option<String>,
     tags: Vec<String>,
+    suggested_by: Option<String>,
 ) -> PostData {
     PostData {
         title: format!("{} v{}", app_name, version),
@@ -48,6 +51,7 @@ pub fn build_apk_post_data(
         tags,
         cover_image,
         download_buttons: Vec::new(),
+        suggested_by,
     }
 }
 
@@ -445,6 +449,13 @@ pub fn render_post_text(post: &PostData) -> String {
         }
     }
 
+    if let Some(ref sugg) = post.suggested_by {
+        let clean = sugg.trim().trim_start_matches('@');
+        if !clean.is_empty() {
+            card.push_str(&format!("\n\n👤 <i>Предложил: @{}</i>", encode_text(clean)));
+        }
+    }
+
     if !post.tags.is_empty() {
         let tag_line: Vec<String> = post
             .tags
@@ -715,12 +726,14 @@ mod tests {
                 "⬇️ Скачать (universal)".to_string(),
                 DownloadTarget::Url("https://example.com/app.apk".to_string()),
             )],
+            suggested_by: Some("slyqfs".to_string()),
         };
 
         let rendered = render_post_text(&post);
         assert!(rendered.contains("🆕 <b>Tokio v1.40.0</b>"));
         assert!(rendered.contains("📝 <i>Async runtime for Rust</i>"));
         assert!(rendered.contains("<blockquote expandable>Added <b>async</b> driver</blockquote>"));
+        assert!(rendered.contains("👤 <i>Предложил: @slyqfs</i>"));
         assert!(rendered.contains("#async #rust"));
 
         let kb = render_post_keyboard(&post);
@@ -738,6 +751,7 @@ mod tests {
             tags: vec![],
             cover_image: None,
             download_buttons: vec![],
+            suggested_by: None,
         };
 
         let rendered = render_post_text(&post);
@@ -782,12 +796,14 @@ mod tests {
             Some("https://github.com/2dust/v2rayNG".to_string()),
             Some("file_img_123".to_string()),
             vec!["vpn".to_string(), "android".to_string()],
+            Some("kostubet".to_string()),
         );
 
         assert_eq!(post.title, "V2RayNG v1.8.5");
         assert_eq!(post.description.as_deref(), Some("VPN client for Android"));
         assert_eq!(post.tags, vec!["vpn", "android"]);
         assert_eq!(post.cover_image, Some("file_img_123".to_string()));
+        assert_eq!(post.suggested_by.as_deref(), Some("kostubet"));
         // APK files are delivered as documents after the card, not as buttons.
         assert!(post.download_buttons.is_empty());
     }
@@ -863,6 +879,7 @@ mod tests {
             tags: vec![],
             cover_image: None,
             download_buttons: vec![],
+            suggested_by: None,
         };
 
         let rendered = render_post_text(&post);
@@ -897,6 +914,7 @@ mod tests {
             tags: vec![],
             cover_image: None,
             download_buttons: vec![],
+            suggested_by: None,
         };
         let rendered = render_post_text(&post);
         assert!(!rendered.contains("screenshot"), "image alt must be gone: {}", rendered);
