@@ -235,12 +235,8 @@ pub async fn handle_callback(
         return submit_flow::handle_submit_skip(&bot, &q, &dialogue).await;
     }
 
-    if let Some(mode) = data.strip_prefix("sub:guide_mode:") {
-        return submit_flow::handle_guide_mode(&bot, &q, mode, &dialogue).await;
-    }
-
-    if let Some(action) = data.strip_prefix("sub:guide_steps:") {
-        return submit_flow::handle_guide_steps(&bot, &q, action, &dialogue).await;
+    if data == "sub:apk_files:done" {
+        return submit_flow::handle_apk_files_done(&bot, &q, &dialogue).await;
     }
 
     // Resume prompt when /submitapk is invoked mid-dialogue

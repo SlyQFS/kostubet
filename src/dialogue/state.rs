@@ -30,8 +30,6 @@ pub struct SubmitApkData {
     pub guide_url: Option<String>,
     /// Optional raw quick guide text.
     pub guide_text: Option<String>,
-    /// Step accumulator for step-by-step illustrated guides.
-    pub pending_guide_steps: Vec<crate::services::telegraph::GuideStep>,
     /// Raw uploaded screenshot file_ids before collage stitching.
     pub raw_cover_file_ids: Vec<String>,
     pub cover_image_file_id: Option<String>,
@@ -60,16 +58,7 @@ pub enum SubmitApkState {
     WaitingDiffUrl {
         data: Box<SubmitApkData>,
     },
-    WaitingGuideMode {
-        data: Box<SubmitApkData>,
-    },
-    WaitingGuideText {
-        data: Box<SubmitApkData>,
-    },
-    CollectingGuideSteps {
-        data: Box<SubmitApkData>,
-    },
-    WaitingGuideUrl {
+    WaitingGuide {
         data: Box<SubmitApkData>,
     },
     WaitingCover {

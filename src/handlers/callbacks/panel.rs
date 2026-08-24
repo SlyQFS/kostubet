@@ -569,7 +569,7 @@ pub async fn apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
     Ok((text, InlineKeyboardMarkup::new(rows)))
 }
 
-/// Admin view of published custom apps with deletion controls.
+/// Admin view of published custom apps with individual card buttons.
 async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, InlineKeyboardMarkup)> {
     let apps = db.custom_apps().list_approved_apps().await?;
     let pages = total_pages(apps.len(), APPS_PAGE_SIZE);
@@ -577,13 +577,13 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
     let chunk = &apps[page * APPS_PAGE_SIZE..(page * APPS_PAGE_SIZE + APPS_PAGE_SIZE).min(apps.len())];
 
     let mut text = format!(
-        "📱 <b>Опубликованные приложения</b> ({}, стр. {}/{})\n\nℹ️ 📝 — изменить описание, 🗑 — удалить.",
+        "📱 <b>Каталог опубликованных приложений</b> ({}, стр. {}/{})\n\nВыберите приложение для просмотра, редактирования или публикации:",
         apps.len(),
         page + 1,
         pages
     );
     if apps.is_empty() {
-        text = "📱 <b>Опубликованные приложения</b>\n\n📭 Пока нет опубликованных приложений.".to_string();
+        text = "📱 <b>Каталог опубликованных приложений</b>\n\n📭 Пока нет опубликованных приложений.".to_string();
     }
 
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
@@ -596,17 +596,120 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
             .flatten()
             .map(|v| format!(" (v{})", encode_text(&v.version)))
             .unwrap_or_default();
-        text.push_str(&format!("\n• <b>{}</b>{}", encode_text(&app.name), ver_str));
         rows.push(vec![
-            btn("📢", format!("adm:apppost:{}", app.id)),
-            btn("📝", format!("adm:appdesc:{}", app.id)),
-            btn("📖", format!("adm:appguide:{}", app.id)),
-            btn(format!("🗑 {}{}", app.name, ver_str), format!("adm:appdel:{}", app.id)),
+            btn(format!("📱 {}{}", app.name, ver_str), format!("adm:app:{}", app.id)),
         ]);
     }
 
     rows.extend(nav_row("adm:apps", page, pages));
-    rows.push(vec![btn("⬅️ Назад", "adm:root")]);
+    rows.push(vec![btn("⬅️ В панель", "adm:root")]);
+
+    Ok((text, InlineKeyboardMarkup::new(rows)))
+}
+
+async fn app_detail_view(db: &Database, app_id: i64) -> Result<(String, InlineKeyboardMarkup)> {
+    let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+        return Ok((
+            "⚠️ Приложение не найдено (возможно, уже удалено).".to_string(),
+            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ К списку", "adm:apps:0")]]),
+        ));
+    };
+
+    let cur_ver = db
+        .custom_apps()
+        .get_current_version(app.id)
+        .await
+        .ok()
+        .flatten()
+        .map(|v| format!("v{}", v.version))
+        .unwrap_or_else(|| "нет".to_string());
+
+    let tags = db
+        .tags()
+        .get_tags_for_item(ItemType::CustomApp, app.id)
+        .await
+        .unwrap_or_default();
+    let tags_str = if tags.is_empty() {
+        "нет".to_string()
+    } else {
+        tags.iter()
+            .map(|t| format!("#{}", t.name))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    let desc_line = match app.description.as_deref() {
+        Some(d) if !d.trim().is_empty() => format!("\n📝 Описание: <i>{}</i>", encode_text(d.trim())),
+        _ => "\n📝 Описание: <i>не задано</i>".to_string(),
+    };
+
+    let guide_line = match app.guide_url.as_deref() {
+        Some(g) if !g.trim().is_empty() => format!("\n📖 Гайд: <code>{}</code>", encode_text(g.trim())),
+        _ => "\n📖 Гайд: <i>не задан</i>".to_string(),
+    };
+
+    let text = format!(
+        "📱 <b>{}</b> (<code>{}</code>)\n{}\n{}\n🔖 Текущая версия: <code>{}</code>\n🏷 Теги: <code>{}</code>",
+        encode_text(&app.name),
+        encode_text(&app.slug),
+        desc_line,
+        guide_line,
+        encode_text(&cur_ver),
+        encode_text(&tags_str),
+    );
+
+    let kb = InlineKeyboardMarkup::new(vec![
+        vec![btn("📢 Опубликовать", format!("adm:apppost:{}", app.id))],
+        vec![
+            btn("📝 Описание", format!("adm:appdesc:{}", app.id)),
+            btn("📖 Гайд", format!("adm:appguide:{}", app.id)),
+            btn("🏷 Теги", format!("adm:apptags:{}", app.id)),
+        ],
+        vec![
+            btn("🗑 Удалить", format!("adm:appdel:{}", app.id)),
+            btn("⬅️ Назад", "adm:apps:0"),
+        ],
+    ]);
+
+    Ok((text, kb))
+}
+
+async fn app_tags_view(db: &Database, app_id: i64) -> Result<(String, InlineKeyboardMarkup)> {
+    let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+        return Ok((
+            "⚠️ Приложение не найдено.".to_string(),
+            InlineKeyboardMarkup::new(vec![vec![btn("⬅️ Назад", "adm:apps:0")]]),
+        ));
+    };
+
+    let tags = db
+        .tags()
+        .get_tags_for_item(ItemType::CustomApp, app.id)
+        .await
+        .unwrap_or_default();
+
+    let mut text = format!("🏷 <b>Теги приложения: {}</b>", encode_text(&app.name));
+    if tags.is_empty() {
+        text.push_str("\n\n📭 Теги не прикреплены.");
+    }
+
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
+    for t in tags {
+        text.push_str(&format!("\n• #{}", encode_text(&t.name)));
+        rows.push(vec![btn(
+            format!("🗑 #{}", t.name),
+            format!("adm:apptagdel:{}:{}", app.id, t.id),
+        )]);
+    }
+
+    rows.push(vec![btn(
+        "➕ Добавить тег",
+        format!("adm:apptagadd:{}", app.id),
+    )]);
+    rows.push(vec![btn(
+        "⬅️ Назад к приложению",
+        format!("adm:app:{}", app.id),
+    )]);
 
     Ok((text, InlineKeyboardMarkup::new(rows)))
 }
@@ -632,7 +735,7 @@ async fn app_delete_confirm_view(
 
     let kb = InlineKeyboardMarkup::new(vec![vec![
         btn("✅ Да, удалить", format!("adm:appdelok:{}", app.id)),
-        btn("❌ Отменить", "adm:apps:0"),
+        btn("❌ Отменить", format!("adm:app:{}", app.id)),
     ]]);
 
     Ok((text, kb))
@@ -1260,10 +1363,56 @@ pub async fn handle_panel_callback(
         return edit_or_send(bot, q, text, kb).await;
     }
 
-    // Published apps management (deletion)
+    // Published apps management
     if let Some(p) = rest.strip_prefix("apps:") {
         let page = p.parse::<usize>().unwrap_or(0);
         let (text, kb) = adm_apps_page_view(db, page).await?;
+        return edit_or_send(bot, q, text, kb).await;
+    }
+
+    if let Some(id_str) = rest.strip_prefix("app:") {
+        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let (text, kb) = app_detail_view(db, app_id).await?;
+        return edit_or_send(bot, q, text, kb).await;
+    }
+
+    if let Some(id_str) = rest.strip_prefix("apptags:") {
+        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let (text, kb) = app_tags_view(db, app_id).await?;
+        return edit_or_send(bot, q, text, kb).await;
+    }
+
+    if let Some(id_str) = rest.strip_prefix("apptagadd:") {
+        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+            return Ok(());
+        };
+        dialogue
+            .update(DialogueState::Admin(Box::new(AdminState::ItemTag {
+                item_type: ItemType::CustomApp.to_string(),
+                item_id: app.id,
+                item_label: app.name,
+            })))
+            .await?;
+        if let Some(msg) = &q.message {
+            bot.send_message(
+                msg.chat().id,
+                "🏷 Введите название тега для приложения (например: <code>root</code>):\nОтмена: <code>/cancel</code>",
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        return Ok(());
+    }
+
+    if let Some(ids) = rest.strip_prefix("apptagdel:") {
+        let mut parts = ids.split(':');
+        let (Some(app_id), Some(tag_id)) = (parts.next().and_then(parse_id), parts.next().and_then(parse_id))
+        else {
+            return Ok(());
+        };
+        let _ = db.tags().detach_tag(ItemType::CustomApp, app_id, tag_id).await?;
+        let (text, kb) = app_tags_view(db, app_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 

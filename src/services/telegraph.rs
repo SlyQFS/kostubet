@@ -1,24 +1,16 @@
 //! Telegraph API client and Instant View guide publisher.
 //!
 //! Provides automated article creation on `telegra.ph` with Instant View support
-//! from both simple text guides and step-by-step illustrated walkthroughs.
+//! from simple text guides, structured notes, and external links.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
-use teloxide::net::Download;
-use teloxide::prelude::*;
 
 static TELEGRAPH_ACCESS_TOKEN: OnceLock<tokio::sync::RwLock<Option<String>>> = OnceLock::new();
 
 fn get_token_lock() -> &'static tokio::sync::RwLock<Option<String>> {
     TELEGRAPH_ACCESS_TOKEN.get_or_init(|| tokio::sync::RwLock::new(None))
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct GuideStep {
-    pub text: String,
-    pub photo_file_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -51,12 +43,6 @@ struct PageResult {
     url: String,
 }
 
-#[derive(Deserialize)]
-struct UploadResultItem {
-    src: Option<String>,
-    error: Option<String>,
-}
-
 /// Ensures an active Telegraph access token exists, creating a new account if needed.
 pub async fn get_or_create_access_token() -> Result<String> {
     let lock = get_token_lock();
@@ -72,13 +58,20 @@ pub async fn get_or_create_access_token() -> Result<String> {
         return Ok(tok.clone());
     }
 
+    let (author_name, author_url) = get_author_info();
+    let short_name = if author_name.len() > 32 {
+        "KostubetBot".to_string()
+    } else {
+        author_name.clone()
+    };
+
     let client = reqwest::Client::new();
     let resp = client
         .post("https://api.telegra.ph/createAccount")
         .json(&serde_json::json!({
-            "short_name": "KostubetBot",
-            "author_name": "Kostubet Community",
-            "author_url": "https://t.me"
+            "short_name": short_name,
+            "author_name": author_name,
+            "author_url": author_url
         }))
         .send()
         .await
@@ -103,55 +96,7 @@ pub async fn get_or_create_access_token() -> Result<String> {
     Ok(token)
 }
 
-/// Uploads an image downloaded from Telegram to Telegraph's CDN (`telegra.ph/upload`).
-/// Returns the full image URL (e.g. `https://telegra.ph/file/...`).
-pub async fn upload_image_to_telegraph(bot: &Bot, file_id: &str) -> Result<String> {
-    let file = bot
-        .get_file(file_id.to_string())
-        .await
-        .context("Failed to get Telegram file info")?;
-
-    let mut image_bytes = Vec::new();
-    bot.download_file(&file.path, &mut image_bytes)
-        .await
-        .context("Failed to download image bytes from Telegram")?;
-
-    let part = reqwest::multipart::Part::bytes(image_bytes)
-        .file_name("screenshot.jpg")
-        .mime_str("image/jpeg")?;
-
-    let form = reqwest::multipart::Form::new().part("file", part);
-
-    let client = reqwest::Client::new();
-    let resp = client
-        .post("https://telegra.ph/upload")
-        .multipart(form)
-        .send()
-        .await
-        .context("Failed to upload image to Telegraph")?;
-
-    let upload_items: Vec<UploadResultItem> = resp
-        .json()
-        .await
-        .context("Invalid JSON from Telegraph upload")?;
-
-    if let Some(first) = upload_items.first() {
-        if let Some(ref src) = first.src {
-            let full_url = if src.starts_with("http") {
-                src.clone()
-            } else {
-                format!("https://telegra.ph{}", src)
-            };
-            return Ok(full_url);
-        } else if let Some(ref err) = first.error {
-            return Err(anyhow::anyhow!("Telegraph upload error: {}", err));
-        }
-    }
-
-    Err(anyhow::anyhow!("Empty upload response from Telegraph"))
-}
-
-/// Publishes a quick text guide to Telegraph and returns the article URL.
+/// Publishes a text guide to Telegraph and returns the article URL with Instant View support.
 pub async fn publish_text_guide(
     title: &str,
     author: Option<&str>,
@@ -163,11 +108,32 @@ pub async fn publish_text_guide(
     for paragraph in text.split('\n') {
         let trimmed = paragraph.trim();
         if !trimmed.is_empty() {
-            nodes.push(TelegraphNode::Element {
-                tag: "p".to_string(),
-                attrs: None,
-                children: Some(vec![TelegraphNode::Text(trimmed.to_string())]),
-            });
+            // Check if paragraph looks like a header (starts with # or ##)
+            if let Some(h3) = trimmed.strip_prefix("### ") {
+                nodes.push(TelegraphNode::Element {
+                    tag: "h4".to_string(),
+                    attrs: None,
+                    children: Some(vec![TelegraphNode::Text(h3.trim().to_string())]),
+                });
+            } else if let Some(h2) = trimmed.strip_prefix("## ") {
+                nodes.push(TelegraphNode::Element {
+                    tag: "h4".to_string(),
+                    attrs: None,
+                    children: Some(vec![TelegraphNode::Text(h2.trim().to_string())]),
+                });
+            } else if let Some(h1) = trimmed.strip_prefix("# ") {
+                nodes.push(TelegraphNode::Element {
+                    tag: "h3".to_string(),
+                    attrs: None,
+                    children: Some(vec![TelegraphNode::Text(h1.trim().to_string())]),
+                });
+            } else {
+                nodes.push(TelegraphNode::Element {
+                    tag: "p".to_string(),
+                    attrs: None,
+                    children: Some(vec![TelegraphNode::Text(trimmed.to_string())]),
+                });
+            }
         }
     }
 
@@ -179,74 +145,43 @@ pub async fn publish_text_guide(
         });
     }
 
-    create_page(&token, title, author, &nodes).await
-}
-
-/// Publishes a structured step-by-step illustrated guide with screenshots to Telegraph.
-pub async fn publish_steps_guide(
-    bot: &Bot,
-    title: &str,
-    author: Option<&str>,
-    steps: &[GuideStep],
-) -> Result<String> {
-    let token = get_or_create_access_token().await?;
-    let mut nodes = Vec::new();
-
-    for (i, step) in steps.iter().enumerate() {
-        let step_num = i + 1;
-        // Step Header
-        nodes.push(TelegraphNode::Element {
-            tag: "h4".to_string(),
-            attrs: None,
-            children: Some(vec![TelegraphNode::Text(format!("Шаг {}", step_num))]),
-        });
-
-        // Step Screenshot if present
-        if let Some(ref fid) = step.photo_file_id {
-            match upload_image_to_telegraph(bot, fid).await {
-                Ok(img_url) => {
-                    nodes.push(TelegraphNode::Element {
-                        tag: "figure".to_string(),
-                        attrs: None,
-                        children: Some(vec![TelegraphNode::Element {
-                            tag: "img".to_string(),
-                            attrs: Some(serde_json::json!({ "src": img_url })),
-                            children: None,
-                        }]),
-                    });
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to upload step {} image to Telegraph: {}", step_num, e);
-                }
-            }
-        }
-
-        // Step Text / Explanation
-        if !step.text.trim().is_empty() {
+    // Append author attribution at bottom if submitted by user
+    if let Some(author_user) = author {
+        let clean = author_user.trim().trim_start_matches('@');
+        if !clean.is_empty() {
             nodes.push(TelegraphNode::Element {
                 tag: "p".to_string(),
                 attrs: None,
-                children: Some(vec![TelegraphNode::Text(step.text.trim().to_string())]),
+                children: Some(vec![TelegraphNode::Text(format!("👤 Руководство подготовил: @{}", clean))]),
             });
         }
     }
 
-    if nodes.is_empty() {
-        nodes.push(TelegraphNode::Element {
-            tag: "p".to_string(),
-            attrs: None,
-            children: Some(vec![TelegraphNode::Text("Инструкция отсутствует.".to_string())]),
-        });
-    }
+    create_page(&token, title, &nodes).await
+}
 
-    create_page(&token, title, author, &nodes).await
+/// Resolves the official Telegraph author name and URL from environment variables.
+fn get_author_info() -> (String, String) {
+    let author_name = std::env::var("TELEGRAPH_AUTHOR_NAME")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Kostubet".to_string());
+
+    let author_url = std::env::var("TELEGRAPH_AUTHOR_URL")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://t.me".to_string());
+
+    (author_name, author_url)
 }
 
 /// Internal helper to call `createPage` on Telegraph API.
+/// Author and URL are resolved from TELEGRAPH_AUTHOR_NAME and TELEGRAPH_AUTHOR_URL env variables.
 async fn create_page(
     token: &str,
     title: &str,
-    author: Option<&str>,
     content: &[TelegraphNode],
 ) -> Result<String> {
     let safe_title = if title.trim().is_empty() {
@@ -255,7 +190,7 @@ async fn create_page(
         title.trim()
     };
 
-    let author_name = author.unwrap_or("Kostubet Community");
+    let (author_name, author_url) = get_author_info();
 
     let client = reqwest::Client::new();
     let resp = client
@@ -264,6 +199,7 @@ async fn create_page(
             "access_token": token,
             "title": safe_title,
             "author_name": author_name,
+            "author_url": author_url,
             "content": content,
             "return_content": false
         }))

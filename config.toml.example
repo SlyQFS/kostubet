@@ -16,6 +16,10 @@ poll_interval_secs = 900
 # Path to SQLite database file
 db_path = "kostubet.db"
 
+# Optional: Telegraph author configuration for Instant View guides
+telegraph_author_name = "Kostubet"
+telegraph_author_url = "https://t.me"
+
 # Pre-populated list of repositories to track
 [[repos]]
 owner = "rust-lang"

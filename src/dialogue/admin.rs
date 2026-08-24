@@ -457,6 +457,10 @@ pub async fn handle_admin_message(
             db.tools().set_tool_guide(tool_id, guide_url.as_deref(), guide_text.as_deref()).await?;
             dialogue.exit().await?;
             let link_msg = guide_url.as_deref().unwrap_or("сохранено как текст");
+            let kb = InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:repopost:{}", tool_id)),
+                InlineKeyboardButton::callback("📦 К репозиторию", format!("adm:repo:{}", tool_id)),
+            ]]);
             bot.send_message(
                 chat_id,
                 format!(
@@ -465,6 +469,7 @@ pub async fn handle_admin_message(
                     link_msg
                 ),
             )
+            .reply_markup(kb)
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -504,6 +509,10 @@ pub async fn handle_admin_message(
             db.custom_apps().set_app_guide(app_id, guide_url.as_deref(), guide_text.as_deref()).await?;
             dialogue.exit().await?;
             let link_msg = guide_url.as_deref().unwrap_or("сохранено как текст");
+            let kb = InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:apppost:{}", app_id)),
+                InlineKeyboardButton::callback("📱 К приложению", format!("adm:app:{}", app_id)),
+            ]]);
             bot.send_message(
                 chat_id,
                 format!(
@@ -512,6 +521,7 @@ pub async fn handle_admin_message(
                     link_msg
                 ),
             )
+            .reply_markup(kb)
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -526,10 +536,15 @@ pub async fn handle_admin_message(
 
             match db.tags().get_or_create_tag(&text).await {
                 Ok(_) => {
+                    let kb = InlineKeyboardMarkup::new(vec![vec![
+                        InlineKeyboardButton::callback("🏷 Все теги", "adm:tags:0"),
+                        InlineKeyboardButton::callback("👑 В панель", "adm:root"),
+                    ]]);
                     bot.send_message(
                         chat_id,
                         format!("✅ Тег <b>#{}</b> создан.", crate::db::tags::normalize_tag(&text)),
                     )
+                    .reply_markup(kb)
                     .parse_mode(ParseMode::Html)
                     .await?;
                 }
@@ -558,10 +573,22 @@ pub async fn handle_admin_message(
 
             if let Ok(tag_id) = db.tags().get_or_create_tag(&tag_name).await {
                 let _ = db.tags().attach_tag(it, item_id, tag_id).await;
+                let kb = if it == ItemType::CustomApp {
+                    InlineKeyboardMarkup::new(vec![vec![
+                        InlineKeyboardButton::callback("🏷 Теги приложения", format!("adm:apptags:{}", item_id)),
+                        InlineKeyboardButton::callback("📱 К приложению", format!("adm:app:{}", item_id)),
+                    ]])
+                } else {
+                    InlineKeyboardMarkup::new(vec![vec![
+                        InlineKeyboardButton::callback("🏷 Теги репозитория", format!("adm:repotags:{}", item_id)),
+                        InlineKeyboardButton::callback("📦 К репозиторию", format!("adm:repo:{}", item_id)),
+                    ]])
+                };
                 bot.send_message(
                     chat_id,
-                    format!("✅ Тег <b>#{}</b> добавлен к <b>{}</b>.", tag_name, item_label),
+                    format!("✅ Тег <b>#{}</b> добавлен к <b>{}</b>.", tag_name, encode_text(&item_label)),
                 )
+                .reply_markup(kb)
                 .parse_mode(ParseMode::Html)
                 .await?;
             } else {

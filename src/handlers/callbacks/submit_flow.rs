@@ -101,7 +101,6 @@ pub async fn handle_submit_app_select(
             diff_url: None,
             guide_url: app.guide_url.clone(),
             guide_text: app.guide_text.clone(),
-            pending_guide_steps: Vec::new(),
             raw_cover_file_ids: Vec::new(),
             cover_image_file_id: None,
             apk_files: Vec::new(),
@@ -153,10 +152,11 @@ pub async fn handle_variant_select(
             bot.send_message(
                 msg.chat().id,
                 format!(
-                    "✅ Архитектура/тип <b>{}</b> сохранена!\nВсего файлов: <b>{}</b>.\n\nОтправьте следующий файл (.apk, .zip, .7z) или команду <code>/done</code>.",
+                    "✅ Архитектура/тип <b>{}</b> сохранена!\nВсего файлов: <b>{}</b>.\n\nОтправьте следующий файл (.apk, .zip, .7z) или нажмите <b>Готово</b>:",
                     variant, count
                 ),
             )
+            .reply_markup(crate::dialogue::submit_apk::done_or_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -502,25 +502,23 @@ pub async fn handle_submit_skip(
         }
         SubmitApkState::WaitingDiffUrl { data } => {
             dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::WaitingGuideMode {
+                .update(DialogueState::SubmitApk(SubmitApkState::WaitingGuide {
                     data,
                 }))
                 .await?;
             if let Some(cid) = chat_id {
                 bot.send_message(
                     cid,
-                    "📖 <b>Руководство / гайд по настройке</b>:\n\
-                    Хотите прикрепить инструкцию к карточке релиза? Выберите формат:",
+                    "📖 <b>Гайд и инструкция (опционально)</b>\n\n\
+                    Отправьте текст инструкции (бот автоматически опубликует её на Telegraph) или готовую ссылку на руководство (Telegraph, Teletype, 4PDA, GitHub Wiki):\n\
+                    <i>Или нажмите <b>⏩ Пропустить</b></i>",
                 )
-                .reply_markup(crate::dialogue::submit_apk::guide_mode_keyboard())
+                .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
                 .parse_mode(ParseMode::Html)
                 .await?;
             }
         }
-        SubmitApkState::WaitingGuideMode { data }
-        | SubmitApkState::WaitingGuideText { data }
-        | SubmitApkState::CollectingGuideSteps { data }
-        | SubmitApkState::WaitingGuideUrl { data } => {
+        SubmitApkState::WaitingGuide { data } => {
             dialogue
                 .update(DialogueState::SubmitApk(SubmitApkState::WaitingCover {
                     data,
@@ -529,8 +527,9 @@ pub async fn handle_submit_skip(
             if let Some(cid) = chat_id {
                 bot.send_message(
                     cid,
-                    "🖼️ Отправьте фото обложки или несколько скриншотов:\n\
-                    <i>(Если загрузить 2-4 скриншота, будет создан постер)</i>",
+                    "🖼️ <b>Обложка или скриншоты (опционально)</b>\n\n\
+                    Отправьте фото обложки или несколько скриншотов:\n\
+                    <i>(Если загрузить 2-4 скриншота, бот объединит их в постер)</i>",
                 )
                 .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
                 .parse_mode(ParseMode::Html)
@@ -558,140 +557,43 @@ pub async fn handle_submit_skip(
     Ok(())
 }
 
-pub async fn handle_guide_mode(
+pub async fn handle_apk_files_done(
     bot: &Bot,
     q: &CallbackQuery,
-    mode: &str,
     dialogue: &BotDialogue,
 ) -> Result<()> {
     let cur_state = dialogue.get().await?;
-    let Some(DialogueState::SubmitApk(SubmitApkState::WaitingGuideMode { data })) = cur_state else {
+    let Some(DialogueState::SubmitApk(SubmitApkState::WaitingApkFiles { data })) = cur_state else {
         return Ok(());
     };
 
     let chat_id = q.message.as_ref().map(|m| m.chat().id);
+    let Some(cid) = chat_id else { return Ok(()); };
 
-    match mode {
-        "text" => {
-            dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::WaitingGuideText {
-                    data,
-                }))
-                .await?;
-            if let Some(cid) = chat_id {
-                bot.send_message(
-                    cid,
-                    "📝 <b>Введите краткую инструкцию текстом:</b>",
-                )
-                .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
-                .parse_mode(ParseMode::Html)
-                .await?;
-            }
-        }
-        "steps" => {
-            dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::CollectingGuideSteps {
-                    data,
-                }))
-                .await?;
-            if let Some(cid) = chat_id {
-                bot.send_message(
-                    cid,
-                    "📸 <b>Пошаговый мастер с фото</b>:\n\
-                    Отправьте первый скриншот с текстом в подписи (или просто текст).\n\
-                    По завершении нажмите <b>✅ Готово</b>:",
-                )
-                .reply_markup(crate::dialogue::submit_apk::guide_steps_keyboard())
-                .parse_mode(ParseMode::Html)
-                .await?;
-            }
-        }
-        "url" => {
-            dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::WaitingGuideUrl {
-                    data,
-                }))
-                .await?;
-            if let Some(cid) = chat_id {
-                bot.send_message(
-                    cid,
-                    "🔗 <b>Введите ссылку на готовое руководство</b>\n\
-                    <i>(например: <code>https://telegra.ph/...</code>):</i>",
-                )
-                .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
-                .parse_mode(ParseMode::Html)
-                .await?;
-            }
-        }
-        _ => {}
-    }
-
-    Ok(())
-}
-
-pub async fn handle_guide_steps(
-    bot: &Bot,
-    q: &CallbackQuery,
-    action: &str,
-    dialogue: &BotDialogue,
-) -> Result<()> {
-    let cur_state = dialogue.get().await?;
-    let Some(DialogueState::SubmitApk(SubmitApkState::CollectingGuideSteps { mut data })) = cur_state else {
+    if data.apk_files.is_empty() {
+        bot.send_message(
+            cid,
+            "⚠️ Загрузите хотя бы один файл (.apk, .zip, .7z) или отмените заявку:",
+        )
+        .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
+        .parse_mode(ParseMode::Html)
+        .await?;
         return Ok(());
-    };
-
-    let chat_id = q.message.as_ref().map(|m| m.chat().id);
-
-    match action {
-        "done" => {
-            if let Some(cid) = chat_id {
-                if !data.pending_guide_steps.is_empty() {
-                    let _ = bot.send_chat_action(cid, teloxide::types::ChatAction::Typing).await;
-                    if let Ok(url) = crate::services::telegraph::publish_steps_guide(
-                        bot,
-                        &data.name,
-                        data.submitted_by_username.as_deref(),
-                        &data.pending_guide_steps,
-                    ).await {
-                        data.guide_url = Some(url);
-                    }
-                }
-
-                dialogue
-                    .update(DialogueState::SubmitApk(SubmitApkState::WaitingCover {
-                        data,
-                    }))
-                    .await?;
-
-                bot.send_message(
-                    cid,
-                    "✅ Пошаговый гайд опубликован на Telegraph!\n\n🖼️ Отправьте фото обложки или несколько скриншотов:\n\
-                    <i>(Если загрузить 2-4 скриншота, будет создан постер)</i>",
-                )
-                .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
-                .parse_mode(ParseMode::Html)
-                .await?;
-            }
-        }
-        "clear" => {
-            data.pending_guide_steps.clear();
-            dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::CollectingGuideSteps {
-                    data,
-                }))
-                .await?;
-            if let Some(cid) = chat_id {
-                bot.send_message(
-                    cid,
-                    "🔄 Шаги гайда очищены. Отправьте скриншоты заново или нажмите <b>✅ Готово</b> / <b>⏩ Пропустить</b>:",
-                )
-                .reply_markup(crate::dialogue::submit_apk::guide_steps_keyboard())
-                .parse_mode(ParseMode::Html)
-                .await?;
-            }
-        }
-        _ => {}
     }
+
+    dialogue
+        .update(DialogueState::SubmitApk(SubmitApkState::WaitingTags {
+            data,
+        }))
+        .await?;
+
+    bot.send_message(
+        cid,
+        "🏷️ Введите теги (например: <code>#example</code>):",
+    )
+    .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
+    .parse_mode(ParseMode::Html)
+    .await?;
 
     Ok(())
 }
