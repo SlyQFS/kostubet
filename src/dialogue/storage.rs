@@ -171,6 +171,7 @@ mod tests {
                 title: None,
                 changelog: None,
                 diff_url: None,
+                raw_cover_file_ids: Vec::new(),
                 cover_image_file_id: None,
                 apk_files: Vec::new(),
                 tags: vec!["tool".to_string()],

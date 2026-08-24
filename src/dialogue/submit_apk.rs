@@ -220,6 +220,7 @@ pub async fn handle_submit_message(
                 title: None,
                 changelog: None,
                 diff_url: None,
+                raw_cover_file_ids: Vec::new(),
                 cover_image_file_id: None,
                 apk_files: Vec::new(),
                 tags: Vec::new(),
@@ -344,21 +345,45 @@ pub async fn handle_submit_message(
 
             bot.send_message(
                 chat_id,
-                "🖼️ Отправьте фото обложки:",
+                "🖼️ Отправьте фото обложки или несколько скриншотов:\n\
+                <i>(Если загрузить 2-4 скриншота, будет создан постер)</i>",
             )
             .reply_markup(skip_or_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
         SubmitApkState::WaitingCover { mut data } => {
+            let mut image_file_id = None;
+
             if let Some(photos) = msg.photo() {
                 if let Some(largest) = photos.iter().max_by_key(|p| p.width * p.height) {
-                    data.cover_image_file_id = Some(largest.file.id.clone());
+                    image_file_id = Some(largest.file.id.clone());
                 }
-            } else if text != "/skip" {
+            } else if let Some(doc) = msg.document() {
+                if let Some(ref mime) = doc.mime_type {
+                    if mime.to_string().starts_with("image/") {
+                        image_file_id = Some(doc.file.id.clone());
+                    }
+                }
+            }
+
+            if let Some(fid) = image_file_id {
+                data.raw_cover_file_ids.push(fid);
+                let count = data.raw_cover_file_ids.len();
+
+                dialogue
+                    .update(DialogueState::SubmitApk(SubmitApkState::WaitingCover {
+                        data,
+                    }))
+                    .await?;
+
                 bot.send_message(
                     chat_id,
-                    "⚠️ Отправьте фото или нажмите <b>Пропустить</b>:",
+                    format!(
+                        "✅ Изображение добавлено (всего: <b>{}</b>).\n\
+                        Отправьте ещё скриншоты или нажмите <b>Продолжить</b>:",
+                        count
+                    ),
                 )
                 .reply_markup(skip_or_cancel_keyboard())
                 .parse_mode(ParseMode::Html)
@@ -366,19 +391,18 @@ pub async fn handle_submit_message(
                 return Ok(());
             }
 
-            dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::WaitingApkFiles {
-                    data,
-                }))
+            if text != "/skip" && text != "/done" {
+                bot.send_message(
+                    chat_id,
+                    "⚠️ Отправьте фото/скриншот или нажмите <b>Пропустить</b>:",
+                )
+                .reply_markup(skip_or_cancel_keyboard())
+                .parse_mode(ParseMode::Html)
                 .await?;
+                return Ok(());
+            }
 
-            bot.send_message(
-                chat_id,
-                "📦 Отправьте файлы (<b>.apk, .zip, .7z</b>) документом.\nПо завершении отправьте <code>/done</code>:",
-            )
-            .reply_markup(cancel_keyboard())
-            .parse_mode(ParseMode::Html)
-            .await?;
+            process_cover_and_advance(&bot, chat_id, &dialogue, data).await?;
         }
         SubmitApkState::WaitingApkFiles { mut data } => {
             if text == "/done" {
@@ -557,6 +581,68 @@ pub async fn handle_submit_message(
             .await?;
         }
     }
+
+    Ok(())
+}
+
+/// Processes uploaded screenshots (generating a collage if >1), sets cover_image_file_id,
+/// and advances the dialogue to WaitingApkFiles.
+pub async fn process_cover_and_advance(
+    bot: &Bot,
+    chat_id: ChatId,
+    dialogue: &BotDialogue,
+    mut data: Box<SubmitApkData>,
+) -> Result<()> {
+    if data.raw_cover_file_ids.len() > 1 {
+        let _ = bot
+            .send_chat_action(chat_id, teloxide::types::ChatAction::UploadPhoto)
+            .await;
+
+        use teloxide::net::Download;
+        let mut raw_bytes = Vec::new();
+        for fid in &data.raw_cover_file_ids {
+            if let Ok(file) = bot.get_file(fid.clone()).await {
+                let mut buf = Vec::new();
+                if bot.download_file(&file.path, &mut buf).await.is_ok() {
+                    raw_bytes.push(buf);
+                }
+            }
+        }
+
+        if let Ok(collage_jpeg) = crate::services::collage::create_collage(&raw_bytes) {
+            let input_file =
+                teloxide::types::InputFile::memory(collage_jpeg).file_name("collage.jpg");
+            if let Ok(sent_photo) = bot
+                .send_photo(chat_id, input_file)
+                .caption("📸 Сгенерирован постер из скриншотов:")
+                .await
+            {
+                if let Some(photos) = sent_photo.photo() {
+                    if let Some(largest) = photos.iter().max_by_key(|p| p.width * p.height) {
+                        data.cover_image_file_id = Some(largest.file.id.clone());
+                    }
+                }
+            }
+        } else {
+            data.cover_image_file_id = data.raw_cover_file_ids.first().cloned();
+        }
+    } else if data.raw_cover_file_ids.len() == 1 {
+        data.cover_image_file_id = Some(data.raw_cover_file_ids[0].clone());
+    }
+
+    dialogue
+        .update(DialogueState::SubmitApk(SubmitApkState::WaitingApkFiles {
+            data,
+        }))
+        .await?;
+
+    bot.send_message(
+        chat_id,
+        "📦 Отправьте файлы (<b>.apk, .zip, .7z</b>) документом.\nПо завершении отправьте <code>/done</code>:",
+    )
+    .reply_markup(cancel_keyboard())
+    .parse_mode(ParseMode::Html)
+    .await?;
 
     Ok(())
 }

@@ -2,9 +2,11 @@
 //!
 //! Submodules:
 //! - `apk_variant`: Detection and categorization of APK CPU architectures.
+//! - `collage`: Screenshot montage and collage generator for release cards.
 //! - `github`: GitHub REST API client for querying releases, tags, and commits.
 //! - `render`: Card formatting, markdown HTML parser, and Telegram send pipeline.
 
 pub mod apk_variant;
+pub mod collage;
 pub mod github;
 pub mod render;

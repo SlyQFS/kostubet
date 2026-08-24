@@ -710,7 +710,7 @@ fn parse_id(s: &str) -> Option<i64> {
     s.parse::<i64>().ok()
 }
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 pub async fn handle_panel_callback(
     bot: &Bot,
     q: &CallbackQuery,

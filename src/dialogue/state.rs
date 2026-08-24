@@ -26,6 +26,8 @@ pub struct SubmitApkData {
     pub title: Option<String>,
     pub changelog: Option<String>,
     pub diff_url: Option<String>,
+    /// Raw uploaded screenshot file_ids before collage stitching.
+    pub raw_cover_file_ids: Vec<String>,
     pub cover_image_file_id: Option<String>,
     pub apk_files: Vec<PendingApk>,
     pub tags: Vec<String>,

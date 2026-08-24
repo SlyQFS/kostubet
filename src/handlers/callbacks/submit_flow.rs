@@ -99,6 +99,7 @@ pub async fn handle_submit_app_select(
             title: None,
             changelog: None,
             diff_url: None,
+            raw_cover_file_ids: Vec::new(),
             cover_image_file_id: None,
             apk_files: Vec::new(),
             tags: Vec::new(),
@@ -500,19 +501,8 @@ pub async fn handle_submit_skip(
             }
         }
         SubmitApkState::WaitingCover { data } => {
-            dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::WaitingApkFiles {
-                    data,
-                }))
-                .await?;
             if let Some(cid) = chat_id {
-                bot.send_message(
-                    cid,
-                    "📦 Отправьте файлы (<b>.apk, .zip, .7z</b>) документом.\nПо завершении отправьте <code>/done</code>:",
-                )
-                .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
-                .parse_mode(ParseMode::Html)
-                .await?;
+                crate::dialogue::submit_apk::process_cover_and_advance(bot, cid, dialogue, data).await?;
             }
         }
         SubmitApkState::WaitingTags { data } => {
