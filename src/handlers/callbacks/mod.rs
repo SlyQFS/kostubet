@@ -199,6 +199,10 @@ pub async fn handle_callback(
         return apk_moderation::handle_apk_edit_cancel(&bot, &q, &dialogue).await;
     }
 
+    if let Some(action) = data.strip_prefix("edit_flow:") {
+        return apk_moderation::handle_apk_edit_flow(&bot, &q, action, &dialogue).await;
+    }
+
     // 3. User Submit APK Flow
     if data == "submit_mode:new" {
         return submit_flow::handle_submit_mode_new(&bot, &q, &dialogue).await;
@@ -223,12 +227,20 @@ pub async fn handle_callback(
         .await;
     }
 
-    if data == "submit_confirm:cancel" {
+    if data == "submit_confirm:cancel" || data == "sub:confirm:cancel" {
         return submit_flow::handle_submit_confirm_cancel(&bot, &q, &dialogue).await;
     }
 
-    if data == "submit_skip" {
+    if data == "submit_skip" || data == "sub:skip" {
         return submit_flow::handle_submit_skip(&bot, &q, &dialogue).await;
+    }
+
+    if let Some(mode) = data.strip_prefix("sub:guide_mode:") {
+        return submit_flow::handle_guide_mode(&bot, &q, mode, &dialogue).await;
+    }
+
+    if let Some(action) = data.strip_prefix("sub:guide_steps:") {
+        return submit_flow::handle_guide_steps(&bot, &q, action, &dialogue).await;
     }
 
     // Resume prompt when /submitapk is invoked mid-dialogue

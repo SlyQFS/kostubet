@@ -116,6 +116,7 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                         description: tool.description.clone(),
                                         body: update.body,
                                         diff_url: Some(update.url),
+                                        guide_url: tool.guide_url.clone(),
                                         tags: tag_names,
                                         cover_image: None,
                                         download_buttons,

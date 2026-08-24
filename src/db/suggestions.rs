@@ -16,6 +16,8 @@ pub struct SuggestionRecord {
     pub proposed_tags: Option<String>,
     /// Optional description proposed by the author; applied to the tool on approval.
     pub proposed_description: Option<String>,
+    pub proposed_guide_url: Option<String>,
+    pub proposed_guide_text: Option<String>,
     pub status: String,
     #[allow(dead_code)]
     pub reviewed_by: Option<i64>,
@@ -39,6 +41,7 @@ impl<'a> SuggestionsRepo<'a> {
         Self { pool }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn create_suggestion(
         &self,
         user_id: i64,
@@ -47,11 +50,16 @@ impl<'a> SuggestionsRepo<'a> {
         repo: &str,
         proposed_tags: Option<&str>,
         proposed_description: Option<&str>,
+        proposed_guide_url: Option<&str>,
+        proposed_guide_text: Option<&str>,
     ) -> Result<i64> {
         let res = sqlx::query(
             r#"
-            INSERT INTO suggestions (user_id, username, owner, repo, proposed_tags, proposed_description, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
+            INSERT INTO suggestions (
+                user_id, username, owner, repo, proposed_tags,
+                proposed_description, proposed_guide_url, proposed_guide_text, status, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
             "#,
         )
         .bind(user_id)
@@ -60,6 +68,8 @@ impl<'a> SuggestionsRepo<'a> {
         .bind(repo)
         .bind(proposed_tags)
         .bind(proposed_description)
+        .bind(proposed_guide_url)
+        .bind(proposed_guide_text)
         .execute(self.pool)
         .await
         .context("Failed to create suggestion")?;
@@ -82,7 +92,7 @@ impl<'a> SuggestionsRepo<'a> {
     pub async fn get_pending_suggestions(&self) -> Result<Vec<SuggestionRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, status, reviewed_by, reviewed_at, created_at
+            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, proposed_guide_url, proposed_guide_text, status, reviewed_by, reviewed_at, created_at
             FROM suggestions
             WHERE status = 'pending'
             ORDER BY created_at ASC
@@ -102,6 +112,8 @@ impl<'a> SuggestionsRepo<'a> {
                 repo: r.get("repo"),
                 proposed_tags: r.get("proposed_tags"),
                 proposed_description: r.get("proposed_description"),
+                proposed_guide_url: r.try_get("proposed_guide_url").unwrap_or(None),
+                proposed_guide_text: r.try_get("proposed_guide_text").unwrap_or(None),
                 status: r.get("status"),
                 reviewed_by: r.get("reviewed_by"),
                 reviewed_at: r.get("reviewed_at"),
@@ -118,7 +130,7 @@ impl<'a> SuggestionsRepo<'a> {
     ) -> Result<Option<SuggestionRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, status, reviewed_by, reviewed_at, created_at
+            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, proposed_guide_url, proposed_guide_text, status, reviewed_by, reviewed_at, created_at
             FROM suggestions
             WHERE status = 'pending' AND owner = ? AND repo = ?
             LIMIT 1
@@ -138,6 +150,8 @@ impl<'a> SuggestionsRepo<'a> {
             repo: r.get("repo"),
             proposed_tags: r.get("proposed_tags"),
             proposed_description: r.get("proposed_description"),
+            proposed_guide_url: r.try_get("proposed_guide_url").unwrap_or(None),
+            proposed_guide_text: r.try_get("proposed_guide_text").unwrap_or(None),
             status: r.get("status"),
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
@@ -148,7 +162,7 @@ impl<'a> SuggestionsRepo<'a> {
     pub async fn get_suggestion(&self, id: i64) -> Result<Option<SuggestionRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, status, reviewed_by, reviewed_at, created_at
+            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, proposed_guide_url, proposed_guide_text, status, reviewed_by, reviewed_at, created_at
             FROM suggestions
             WHERE id = ?
             "#,
@@ -166,6 +180,8 @@ impl<'a> SuggestionsRepo<'a> {
             repo: r.get("repo"),
             proposed_tags: r.get("proposed_tags"),
             proposed_description: r.get("proposed_description"),
+            proposed_guide_url: r.try_get("proposed_guide_url").unwrap_or(None),
+            proposed_guide_text: r.try_get("proposed_guide_text").unwrap_or(None),
             status: r.get("status"),
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
@@ -176,7 +192,7 @@ impl<'a> SuggestionsRepo<'a> {
     pub async fn get_user_suggestions(&self, user_id: i64) -> Result<Vec<SuggestionRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, status, reviewed_by, reviewed_at, created_at
+            SELECT id, user_id, username, owner, repo, proposed_tags, proposed_description, proposed_guide_url, proposed_guide_text, status, reviewed_by, reviewed_at, created_at
             FROM suggestions
             WHERE user_id = ?
             ORDER BY created_at DESC
@@ -198,6 +214,8 @@ impl<'a> SuggestionsRepo<'a> {
                 repo: r.get("repo"),
                 proposed_tags: r.get("proposed_tags"),
                 proposed_description: r.get("proposed_description"),
+                proposed_guide_url: r.try_get("proposed_guide_url").unwrap_or(None),
+                proposed_guide_text: r.try_get("proposed_guide_text").unwrap_or(None),
                 status: r.get("status"),
                 reviewed_by: r.get("reviewed_by"),
                 reviewed_at: r.get("reviewed_at"),

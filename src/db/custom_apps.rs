@@ -13,6 +13,10 @@ pub struct CustomAppRecord {
     pub name: String,
     /// Optional app-level description (what the app is; changelog is per version).
     pub description: Option<String>,
+    /// Optional app-level guide URL (e.g. Telegraph).
+    pub guide_url: Option<String>,
+    /// Optional app-level guide text.
+    pub guide_text: Option<String>,
     #[allow(dead_code)]
     pub current_version_id: Option<i64>,
     #[allow(dead_code)]
@@ -30,6 +34,8 @@ pub struct CustomAppVersionRecord {
     pub changelog: Option<String>,
     pub diff_url: Option<String>,
     pub cover_image_file_id: Option<String>,
+    pub guide_url: Option<String>,
+    pub guide_text: Option<String>,
     pub submitted_by: i64,
     pub submitted_by_username: Option<String>,
     pub status: String,
@@ -109,10 +115,27 @@ impl<'a> CustomAppsRepo<'a> {
         Ok(())
     }
 
+    /// Sets or clears app-level guide_url and guide_text.
+    pub async fn set_app_guide(
+        &self,
+        app_id: i64,
+        guide_url: Option<&str>,
+        guide_text: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE custom_apps SET guide_url = ?, guide_text = ? WHERE id = ?")
+            .bind(guide_url)
+            .bind(guide_text)
+            .bind(app_id)
+            .execute(self.pool)
+            .await
+            .context("Failed to update custom app guide")?;
+        Ok(())
+    }
+
     pub async fn get_app_by_slug(&self, slug: &str) -> Result<Option<CustomAppRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, slug, name, description, current_version_id, created_by, created_at
+            SELECT id, slug, name, description, guide_url, guide_text, current_version_id, created_by, created_at
             FROM custom_apps
             WHERE slug = ?
             "#,
@@ -127,6 +150,8 @@ impl<'a> CustomAppsRepo<'a> {
             slug: r.get("slug"),
             name: r.get("name"),
             description: r.get("description"),
+            guide_url: r.try_get("guide_url").unwrap_or(None),
+            guide_text: r.try_get("guide_text").unwrap_or(None),
             current_version_id: r.get("current_version_id"),
             created_by: r.get("created_by"),
             created_at: r.get("created_at"),
@@ -136,7 +161,7 @@ impl<'a> CustomAppsRepo<'a> {
     pub async fn get_app_by_id(&self, id: i64) -> Result<Option<CustomAppRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, slug, name, description, current_version_id, created_by, created_at
+            SELECT id, slug, name, description, guide_url, guide_text, current_version_id, created_by, created_at
             FROM custom_apps
             WHERE id = ?
             "#,
@@ -151,6 +176,8 @@ impl<'a> CustomAppsRepo<'a> {
             slug: r.get("slug"),
             name: r.get("name"),
             description: r.get("description"),
+            guide_url: r.try_get("guide_url").unwrap_or(None),
+            guide_text: r.try_get("guide_text").unwrap_or(None),
             current_version_id: r.get("current_version_id"),
             created_by: r.get("created_by"),
             created_at: r.get("created_at"),
@@ -160,7 +187,7 @@ impl<'a> CustomAppsRepo<'a> {
     pub async fn list_approved_apps(&self) -> Result<Vec<CustomAppRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, slug, name, description, current_version_id, created_by, created_at
+            SELECT id, slug, name, description, guide_url, guide_text, current_version_id, created_by, created_at
             FROM custom_apps
             WHERE current_version_id IS NOT NULL
             ORDER BY name ASC
@@ -177,6 +204,8 @@ impl<'a> CustomAppsRepo<'a> {
                 slug: r.get("slug"),
                 name: r.get("name"),
                 description: r.get("description"),
+                guide_url: r.try_get("guide_url").unwrap_or(None),
+                guide_text: r.try_get("guide_text").unwrap_or(None),
                 current_version_id: r.get("current_version_id"),
                 created_by: r.get("created_by"),
                 created_at: r.get("created_at"),
@@ -193,6 +222,8 @@ impl<'a> CustomAppsRepo<'a> {
         changelog: Option<&str>,
         diff_url: Option<&str>,
         cover_image_file_id: Option<&str>,
+        guide_url: Option<&str>,
+        guide_text: Option<&str>,
         submitted_by: i64,
         submitted_by_username: Option<&str>,
     ) -> Result<i64> {
@@ -200,9 +231,9 @@ impl<'a> CustomAppsRepo<'a> {
             r#"
             INSERT INTO custom_app_versions (
                 app_id, version, title, changelog, diff_url,
-                cover_image_file_id, submitted_by, submitted_by_username, status, created_at
+                cover_image_file_id, guide_url, guide_text, submitted_by, submitted_by_username, status, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', datetime('now'))
             "#,
         )
         .bind(app_id)
@@ -211,6 +242,8 @@ impl<'a> CustomAppsRepo<'a> {
         .bind(changelog)
         .bind(diff_url)
         .bind(cover_image_file_id)
+        .bind(guide_url)
+        .bind(guide_text)
         .bind(submitted_by)
         .bind(submitted_by_username)
         .execute(self.pool)
@@ -220,6 +253,7 @@ impl<'a> CustomAppsRepo<'a> {
         Ok(res.last_insert_rowid())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_version_fields(
         &self,
         version_id: i64,
@@ -227,11 +261,13 @@ impl<'a> CustomAppsRepo<'a> {
         changelog: Option<&str>,
         diff_url: Option<&str>,
         cover_image_file_id: Option<&str>,
+        guide_url: Option<&str>,
+        guide_text: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
             r#"
             UPDATE custom_app_versions
-            SET title = ?, changelog = ?, diff_url = ?, cover_image_file_id = ?
+            SET title = ?, changelog = ?, diff_url = ?, cover_image_file_id = ?, guide_url = ?, guide_text = ?
             WHERE id = ?
             "#,
         )
@@ -239,6 +275,8 @@ impl<'a> CustomAppsRepo<'a> {
         .bind(changelog)
         .bind(diff_url)
         .bind(cover_image_file_id)
+        .bind(guide_url)
+        .bind(guide_text)
         .bind(version_id)
         .execute(self.pool)
         .await
@@ -281,7 +319,7 @@ impl<'a> CustomAppsRepo<'a> {
         let row = sqlx::query(
             r#"
             SELECT id, app_id, version, title, changelog, diff_url,
-                   cover_image_file_id, submitted_by, submitted_by_username, status, reviewed_by,
+                   cover_image_file_id, guide_url, guide_text, submitted_by, submitted_by_username, status, reviewed_by,
                    reviewed_at, published_message_id, created_at
             FROM custom_app_versions
             WHERE id = ?
@@ -300,6 +338,8 @@ impl<'a> CustomAppsRepo<'a> {
             changelog: r.get("changelog"),
             diff_url: r.get("diff_url"),
             cover_image_file_id: r.get("cover_image_file_id"),
+            guide_url: r.try_get("guide_url").unwrap_or(None),
+            guide_text: r.try_get("guide_text").unwrap_or(None),
             submitted_by: r.get("submitted_by"),
             submitted_by_username: r.get("submitted_by_username"),
             status: r.get("status"),
@@ -314,7 +354,7 @@ impl<'a> CustomAppsRepo<'a> {
         let row = sqlx::query(
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
-                   v.cover_image_file_id, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
+                   v.cover_image_file_id, v.guide_url, v.guide_text, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
                    v.reviewed_at, v.published_message_id, v.created_at
             FROM custom_app_versions v
             JOIN custom_apps a ON a.current_version_id = v.id
@@ -334,6 +374,8 @@ impl<'a> CustomAppsRepo<'a> {
             changelog: r.get("changelog"),
             diff_url: r.get("diff_url"),
             cover_image_file_id: r.get("cover_image_file_id"),
+            guide_url: r.try_get("guide_url").unwrap_or(None),
+            guide_text: r.try_get("guide_text").unwrap_or(None),
             submitted_by: r.get("submitted_by"),
             submitted_by_username: r.get("submitted_by_username"),
             status: r.get("status"),
@@ -354,7 +396,7 @@ impl<'a> CustomAppsRepo<'a> {
         let row = sqlx::query(
             r#"
             SELECT id, app_id, version, title, changelog, diff_url,
-                   cover_image_file_id, submitted_by, submitted_by_username, status, reviewed_by,
+                   cover_image_file_id, guide_url, guide_text, submitted_by, submitted_by_username, status, reviewed_by,
                    reviewed_at, published_message_id, created_at
             FROM custom_app_versions
             WHERE app_id = ?
@@ -375,6 +417,8 @@ impl<'a> CustomAppsRepo<'a> {
             changelog: r.get("changelog"),
             diff_url: r.get("diff_url"),
             cover_image_file_id: r.get("cover_image_file_id"),
+            guide_url: r.try_get("guide_url").unwrap_or(None),
+            guide_text: r.try_get("guide_text").unwrap_or(None),
             submitted_by: r.get("submitted_by"),
             submitted_by_username: r.get("submitted_by_username"),
             status: r.get("status"),
@@ -419,9 +463,9 @@ impl<'a> CustomAppsRepo<'a> {
         let rows = sqlx::query(
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
-                   v.cover_image_file_id, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
+                   v.cover_image_file_id, v.guide_url, v.guide_text, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
                    v.reviewed_at, v.published_message_id, v.created_at,
-                   a.slug, a.name, a.description, a.current_version_id, a.created_by, a.created_at as app_created_at
+                   a.slug, a.name, a.description, a.guide_url as app_guide_url, a.guide_text as app_guide_text, a.current_version_id, a.created_by, a.created_at as app_created_at
             FROM custom_app_versions v
             JOIN custom_apps a ON v.app_id = a.id
             WHERE v.status = 'pending'
@@ -443,6 +487,8 @@ impl<'a> CustomAppsRepo<'a> {
                     changelog: r.get("changelog"),
                     diff_url: r.get("diff_url"),
                     cover_image_file_id: r.get("cover_image_file_id"),
+                    guide_url: r.try_get("guide_url").unwrap_or(None),
+                    guide_text: r.try_get("guide_text").unwrap_or(None),
                     submitted_by: r.get("submitted_by"),
                     submitted_by_username: r.get("submitted_by_username"),
                     status: r.get("status"),
@@ -456,6 +502,8 @@ impl<'a> CustomAppsRepo<'a> {
                     slug: r.get("slug"),
                     name: r.get("name"),
                     description: r.get("description"),
+                    guide_url: r.try_get("app_guide_url").unwrap_or(None),
+                    guide_text: r.try_get("app_guide_text").unwrap_or(None),
                     current_version_id: r.get("current_version_id"),
                     created_by: r.get("created_by"),
                     created_at: r.get("app_created_at"),
@@ -484,9 +532,9 @@ impl<'a> CustomAppsRepo<'a> {
         let rows = sqlx::query(
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
-                   v.cover_image_file_id, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
+                   v.cover_image_file_id, v.guide_url, v.guide_text, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
                    v.reviewed_at, v.published_message_id, v.created_at,
-                   a.slug, a.name, a.description, a.current_version_id, a.created_by, a.created_at as app_created_at
+                   a.slug, a.name, a.description, a.guide_url as app_guide_url, a.guide_text as app_guide_text, a.current_version_id, a.created_by, a.created_at as app_created_at
             FROM custom_app_versions v
             JOIN custom_apps a ON v.app_id = a.id
             WHERE v.submitted_by = ?
@@ -510,6 +558,8 @@ impl<'a> CustomAppsRepo<'a> {
                     changelog: r.get("changelog"),
                     diff_url: r.get("diff_url"),
                     cover_image_file_id: r.get("cover_image_file_id"),
+                    guide_url: r.try_get("guide_url").unwrap_or(None),
+                    guide_text: r.try_get("guide_text").unwrap_or(None),
                     submitted_by: r.get("submitted_by"),
                     submitted_by_username: r.get("submitted_by_username"),
                     status: r.get("status"),
@@ -523,6 +573,8 @@ impl<'a> CustomAppsRepo<'a> {
                     slug: r.get("slug"),
                     name: r.get("name"),
                     description: r.get("description"),
+                    guide_url: r.try_get("app_guide_url").unwrap_or(None),
+                    guide_text: r.try_get("app_guide_text").unwrap_or(None),
                     current_version_id: r.get("current_version_id"),
                     created_by: r.get("created_by"),
                     created_at: r.get("app_created_at"),

@@ -10,3 +10,4 @@ pub mod apk_variant;
 pub mod collage;
 pub mod github;
 pub mod render;
+pub mod telegraph;

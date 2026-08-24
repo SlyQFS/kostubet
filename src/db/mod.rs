@@ -118,6 +118,8 @@ impl Database {
                 description      TEXT,
                 suggested_by     TEXT,
                 last_message_ids TEXT,
+                guide_url        TEXT,
+                guide_text       TEXT,
                 UNIQUE(owner, repo)
             );
 
@@ -144,6 +146,8 @@ impl Database {
                 repo                 TEXT NOT NULL,
                 proposed_tags        TEXT,
                 proposed_description TEXT,
+                proposed_guide_url   TEXT,
+                proposed_guide_text  TEXT,
                 status               TEXT NOT NULL DEFAULT 'pending',
                 reviewed_by          INTEGER,
                 reviewed_at          TEXT,
@@ -156,6 +160,8 @@ impl Database {
                 slug               TEXT UNIQUE NOT NULL,
                 name               TEXT NOT NULL,
                 description        TEXT,
+                guide_url          TEXT,
+                guide_text         TEXT,
                 current_version_id INTEGER,
                 created_by         INTEGER NOT NULL,
                 created_at         TEXT NOT NULL
@@ -170,6 +176,8 @@ impl Database {
                 changelog             TEXT,
                 diff_url              TEXT,
                 cover_image_file_id   TEXT,
+                guide_url             TEXT,
+                guide_text            TEXT,
                 submitted_by          INTEGER NOT NULL,
                 submitted_by_username TEXT,
                 status                TEXT NOT NULL DEFAULT 'pending',
@@ -229,14 +237,22 @@ impl Database {
                 .await;
         }
 
-        // Idempotent check: optional description and proposer/submitter columns (repo / suggestion / app)
+        // Idempotent check: optional description, proposer, and guide columns
         for (table, column) in [
             ("tracked_tools", "description"),
             ("tracked_tools", "suggested_by"),
             ("tracked_tools", "last_message_ids"),
+            ("tracked_tools", "guide_url"),
+            ("tracked_tools", "guide_text"),
             ("suggestions", "proposed_description"),
+            ("suggestions", "proposed_guide_url"),
+            ("suggestions", "proposed_guide_text"),
             ("custom_apps", "description"),
+            ("custom_apps", "guide_url"),
+            ("custom_apps", "guide_text"),
             ("custom_app_versions", "submitted_by_username"),
+            ("custom_app_versions", "guide_url"),
+            ("custom_app_versions", "guide_text"),
         ] {
             let has_column: Option<i64> = sqlx::query_scalar(&format!(
                 "SELECT COUNT(1) FROM pragma_table_info('{}') WHERE name = '{}';",
@@ -381,6 +397,8 @@ mod tests {
                 "rust",
                 Some("compiler, language"),
                 Some("The Rust compiler"),
+                None,
+                None,
             )
             .await?;
         assert_eq!(db.suggestions().count_pending_for_user(400).await?, 1);
@@ -416,6 +434,8 @@ mod tests {
                 "1.0.0",
                 Some("v1.0.0 Title"),
                 Some("Changelog"),
+                None,
+                None,
                 None,
                 None,
                 400,
@@ -532,7 +552,7 @@ mod tests {
 
         let sugg_id = db
             .suggestions()
-            .create_suggestion(10, None, "a", "b", None, Some("sd"))
+            .create_suggestion(10, None, "a", "b", None, Some("sd"), None, None)
             .await?;
         assert_eq!(
             db.suggestions().get_suggestion(sugg_id).await?.unwrap().proposed_description.as_deref(),

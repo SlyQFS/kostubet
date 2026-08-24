@@ -4,11 +4,11 @@ use crate::db::tags::ItemType;
 use crate::db::Database;
 use crate::dialogue::state::{DialogueState, EditApkData, EditApkState};
 use crate::dialogue::BotDialogue;
-use crate::services::render::{build_apk_post_data, send_apk_documents, send_post};
+use crate::services::render::{build_apk_post_data, render_post_text, send_apk_documents, send_post};
 use anyhow::Result;
 use html_escape::encode_text;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, ParseMode};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 use tracing::{error, info, warn};
 
 #[allow(clippy::too_many_arguments)]
@@ -63,12 +63,14 @@ pub async fn handle_apk_approve(
         .map(|t| t.name)
         .collect();
 
+    let guide_url = ver.guide_url.clone().or_else(|| app.guide_url.clone());
     let post = build_apk_post_data(
         &app.name,
         &ver.version,
         app.description.clone(),
         ver.changelog.clone(),
         ver.diff_url.clone(),
+        guide_url,
         ver.cover_image_file_id.clone(),
         tags,
         ver.submitted_by_username.clone(),
@@ -313,6 +315,8 @@ pub async fn handle_apk_edit_start(
         title: ver.title,
         changelog: ver.changelog,
         diff_url: ver.diff_url,
+        guide_url: ver.guide_url.or(app.guide_url.clone()),
+        guide_text: ver.guide_text.or(app.guide_text.clone()),
         cover_image_file_id: ver.cover_image_file_id,
         tags: tags.into_iter().map(|t| t.name).collect(),
         submitted_by_username: ver.submitted_by_username,
@@ -335,11 +339,12 @@ pub async fn handle_apk_edit_start(
             format!(
                 "✏️ <b>Редактирование заявки #{}</b>\n\
                 Текущий заголовок: <code>{}</code>\n\n\
-                Введите новый заголовок, <code>/skip</code> — оставить как есть, <code>/clear</code> — убрать:",
+                Введите новый заголовок или используйте кнопки ниже:",
                 ver_id,
                 encode_text(&cur_title)
             ),
         )
+        .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
         .parse_mode(ParseMode::Html)
         .await?;
     }
@@ -399,8 +404,17 @@ pub async fn handle_apk_edit_publish(
                 data.changelog.as_deref(),
                 data.diff_url.as_deref(),
                 data.cover_image_file_id.as_deref(),
+                data.guide_url.as_deref(),
+                data.guide_text.as_deref(),
             )
             .await?;
+
+        if data.guide_url.is_some() {
+            let _ = db
+                .custom_apps()
+                .set_app_guide(app.id, data.guide_url.as_deref(), data.guide_text.as_deref())
+                .await;
+        }
 
         db.custom_apps()
             .set_app_description(app.id, data.description.as_deref())
@@ -419,6 +433,7 @@ pub async fn handle_apk_edit_publish(
             data.description.clone(),
             data.changelog.clone(),
             data.diff_url.clone(),
+            data.guide_url.clone().or_else(|| app.guide_url.clone()),
             data.cover_image_file_id.clone(),
             data.tags.clone(),
             data.submitted_by_username.clone(),
@@ -561,5 +576,124 @@ pub async fn handle_apk_edit_cancel(
             )
             .await;
     }
+    Ok(())
+}
+
+pub async fn handle_apk_edit_flow(
+    bot: &Bot,
+    q: &CallbackQuery,
+    action: &str,
+    dialogue: &BotDialogue,
+) -> Result<()> {
+    if action == "cancel" {
+        return handle_apk_edit_cancel(bot, q, dialogue).await;
+    }
+
+    let cur_state = dialogue.get().await?;
+    let Some(DialogueState::EditApk(state)) = cur_state else {
+        return Ok(());
+    };
+
+    let chat_id = q.message.as_ref().map(|m| m.chat().id);
+    let Some(cid) = chat_id else { return Ok(()); };
+
+    match (action, state) {
+        ("skip", EditApkState::EditingTitle { data }) => {
+            let cur_desc = data.description.clone().unwrap_or_else(|| "не задано".to_string());
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingDescription { data })).await?;
+            bot.send_message(cid, format!("📝 <b>Текущее описание приложения:</b>\n<i>{}</i>\n\nВведите новое описание или используйте кнопки:", encode_text(&cur_desc)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("clear", EditApkState::EditingTitle { mut data }) => {
+            data.title = None;
+            let cur_desc = data.description.clone().unwrap_or_else(|| "не задано".to_string());
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingDescription { data })).await?;
+            bot.send_message(cid, format!("📝 <b>Текущее описание приложения:</b>\n<i>{}</i>\n\nВведите новое описание или используйте кнопки:", encode_text(&cur_desc)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("skip", EditApkState::EditingDescription { data }) => {
+            let cur_changelog = data.changelog.clone().unwrap_or_else(|| "не указан".to_string());
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingChangelog { data })).await?;
+            bot.send_message(cid, format!("📝 <b>Текущий список изменений (Changelog):</b>\n<code>{}</code>\n\nВведите новый список изменений или используйте кнопки:", encode_text(&cur_changelog)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("clear", EditApkState::EditingDescription { mut data }) => {
+            data.description = None;
+            let cur_changelog = data.changelog.clone().unwrap_or_else(|| "не указан".to_string());
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingChangelog { data })).await?;
+            bot.send_message(cid, format!("📝 <b>Текущий список изменений (Changelog):</b>\n<code>{}</code>\n\nВведите новый список изменений или используйте кнопки:", encode_text(&cur_changelog)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("skip", EditApkState::EditingChangelog { data }) => {
+            let cur_diff = data.diff_url.clone().unwrap_or_else(|| "не указана".to_string());
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingDiffUrl { data })).await?;
+            bot.send_message(cid, format!("🔗 <b>Текущая ссылка на изменения (Diff URL):</b>\n<code>{}</code>\n\nВведите новую ссылку или используйте кнопки:", encode_text(&cur_diff)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("clear", EditApkState::EditingChangelog { mut data }) => {
+            data.changelog = None;
+            let cur_diff = data.diff_url.clone().unwrap_or_else(|| "не указана".to_string());
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingDiffUrl { data })).await?;
+            bot.send_message(cid, format!("🔗 <b>Текущая ссылка на изменения (Diff URL):</b>\n<code>{}</code>\n\nВведите новую ссылку или используйте кнопки:", encode_text(&cur_diff)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("skip", EditApkState::EditingDiffUrl { data }) => {
+            let cur_guide = data.guide_url.clone().unwrap_or_else(|| "не указан".to_string());
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingGuide { data })).await?;
+            bot.send_message(cid, format!("📖 <b>Текущий гайд / инструкция:</b>\n<code>{}</code>\n\nВведите новый текст инструкции или ссылку на Telegraph:", encode_text(&cur_guide)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("clear", EditApkState::EditingDiffUrl { mut data }) => {
+            data.diff_url = None;
+            let cur_guide = data.guide_url.clone().unwrap_or_else(|| "не указан".to_string());
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingGuide { data })).await?;
+            bot.send_message(cid, format!("📖 <b>Текущий гайд / инструкция:</b>\n<code>{}</code>\n\nВведите новый текст инструкции или ссылку на Telegraph:", encode_text(&cur_guide)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("skip", EditApkState::EditingGuide { data }) => {
+            let cur_tags = if data.tags.is_empty() { "нет тегов".to_string() } else { data.tags.join(", ") };
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingTags { data })).await?;
+            bot.send_message(cid, format!("🏷️ <b>Текущие теги:</b> <code>{}</code>\n\nВведите новые теги через пробел/запятую:", encode_text(&cur_tags)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_or_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("clear", EditApkState::EditingGuide { mut data }) => {
+            data.guide_url = None;
+            data.guide_text = None;
+            let cur_tags = if data.tags.is_empty() { "нет тегов".to_string() } else { data.tags.join(", ") };
+            dialogue.update(DialogueState::EditApk(EditApkState::EditingTags { data })).await?;
+            bot.send_message(cid, format!("🏷️ <b>Текущие теги:</b> <code>{}</code>\n\nВведите новые теги через пробел/запятую:", encode_text(&cur_tags)))
+                .reply_markup(crate::dialogue::edit_apk::edit_skip_or_cancel_keyboard())
+                .parse_mode(ParseMode::Html).await?;
+        }
+        ("skip", EditApkState::EditingTags { data }) => {
+            let post = build_apk_post_data(
+                &data.app_name, &data.version, data.description.clone(), data.changelog.clone(),
+                data.diff_url.clone(), data.guide_url.clone(), data.cover_image_file_id.clone(),
+                data.tags.clone(), data.submitted_by_username.clone(),
+            );
+            let preview_text = render_post_text(&post);
+            let confirm_kb = InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback("🚀 Опубликовать", format!("edit_publish:{}", data.version_id)),
+                InlineKeyboardButton::callback("❌ Отмена", "edit_cancel"),
+            ]]);
+            let version_id = data.version_id;
+            dialogue.update(DialogueState::EditApk(EditApkState::ConfirmEdit { data })).await?;
+            bot.send_message(cid, format!("👀 <b>Предпросмотр отредактированного релиза #{}</b>:\n\n{}\n\n━━━━━━━━━━━━━━━\nОпубликовать?", version_id, preview_text))
+                .parse_mode(ParseMode::Html)
+                .reply_markup(confirm_kb)
+                .await?;
+        }
+        _ => {}
+    }
+
     Ok(())
 }

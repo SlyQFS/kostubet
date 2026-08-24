@@ -241,6 +241,7 @@ async fn repo_detail_view(db: &Database, tool_id: i64) -> Result<(String, Inline
         vec![btn("📢 Опубликовать", format!("adm:repopost:{}", tool.id))],
         vec![
             btn("📝 Описание", format!("adm:repodesc:{}", tool.id)),
+            btn("📖 Гайд", format!("adm:repoguide:{}", tool.id)),
             btn("🏷 Теги", format!("adm:repotags:{}", tool.id)),
         ],
         vec![
@@ -436,14 +437,14 @@ async fn pending_page_view(
     // Interleave both queues into a single ordered list of render actions.
     enum Item {
         Sugg(crate::db::suggestions::SuggestionRecord),
-        Apk(crate::db::custom_apps::CustomAppVersionRecord, crate::db::custom_apps::CustomAppRecord),
+        Apk(Box<crate::db::custom_apps::CustomAppVersionRecord>, crate::db::custom_apps::CustomAppRecord),
     }
     let mut items: Vec<Item> = Vec::with_capacity(total);
     for s in suggestions {
         items.push(Item::Sugg(s));
     }
     for (ver, app) in pending_apps {
-        items.push(Item::Apk(ver, app));
+        items.push(Item::Apk(Box::new(ver), app));
     }
 
     let pages = total_pages(total, PENDING_PAGE_SIZE);
@@ -599,6 +600,7 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
         rows.push(vec![
             btn("📢", format!("adm:apppost:{}", app.id)),
             btn("📝", format!("adm:appdesc:{}", app.id)),
+            btn("📖", format!("adm:appguide:{}", app.id)),
             btn(format!("🗑 {}{}", app.name, ver_str), format!("adm:appdel:{}", app.id)),
         ]);
     }
@@ -853,6 +855,7 @@ pub async fn handle_panel_callback(
                     description: tool.description.clone(),
                     body: update.body,
                     diff_url: Some(update.url),
+                    guide_url: tool.guide_url.clone(),
                     tags: tag_names,
                     cover_image: None,
                     download_buttons,
@@ -951,12 +954,14 @@ pub async fn handle_panel_callback(
             .unwrap_or_default();
         let tag_names: Vec<String> = tags.into_iter().map(|t| t.name).collect();
 
+        let guide_url = ver.guide_url.clone().or_else(|| app.guide_url.clone());
         let post = build_apk_post_data(
             &app.name,
             &ver.version,
             app.description.clone(),
             ver.changelog.clone(),
             ver.diff_url.clone(),
+            guide_url,
             ver.cover_image_file_id.clone(),
             tag_names,
             ver.submitted_by_username.clone(),
@@ -1063,6 +1068,39 @@ pub async fn handle_panel_callback(
         return Ok(());
     }
 
+    if let Some(id_str) = rest.strip_prefix("repoguide:") {
+        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
+            return Ok(());
+        };
+        dialogue
+            .update(DialogueState::Admin(Box::new(AdminState::RepoGuide {
+                tool_id,
+            })))
+            .await?;
+        if let Some(msg) = &q.message {
+            let cur_guide = tool
+                .guide_url
+                .as_deref()
+                .unwrap_or("не указан")
+                .to_string();
+            bot.send_message(
+                msg.chat().id,
+                format!(
+                    "📖 <b>Гайд / инструкция для {}</b>\n\
+                    Текущий: <code>{}</code>\n\n\
+                    Отправьте текст инструкции (опубликуется на Telegraph) или готовую ссылку, <code>/skip</code> — оставить как есть, <code>/clear</code> — удалить.\n\
+                    Отмена: <code>/cancel</code>",
+                    encode_text(&tool.full_name()),
+                    encode_text(&cur_guide)
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        return Ok(());
+    }
+
     if let Some(id_str) = rest.strip_prefix("appdesc:") {
         let Some(app_id) = parse_id(id_str) else { return Ok(()) };
         let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
@@ -1084,6 +1122,35 @@ pub async fn handle_panel_callback(
                     Отмена: <code>/cancel</code>",
                     encode_text(&app.name),
                     encode_text(&cur_desc)
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        return Ok(());
+    }
+
+    if let Some(id_str) = rest.strip_prefix("appguide:") {
+        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+            return Ok(());
+        };
+        dialogue
+            .update(DialogueState::Admin(Box::new(AdminState::AppGuide {
+                app_id,
+            })))
+            .await?;
+        if let Some(msg) = &q.message {
+            let cur_guide = app.guide_url.as_deref().unwrap_or("не указан").to_string();
+            bot.send_message(
+                msg.chat().id,
+                format!(
+                    "📖 <b>Гайд / инструкция для приложения {}</b>\n\
+                    Текущий: <code>{}</code>\n\n\
+                    Отправьте текст инструкции (опубликуется на Telegraph) или готовую ссылку, <code>/skip</code> — оставить как есть, <code>/clear</code> — удалить.\n\
+                    Отмена: <code>/cancel</code>",
+                    encode_text(&app.name),
+                    encode_text(&cur_guide)
                 ),
             )
             .parse_mode(ParseMode::Html)
@@ -1367,12 +1434,14 @@ pub async fn handle_appcard_callback(
         .map(|t| t.name)
         .collect();
 
+    let guide_url = ver.guide_url.clone().or_else(|| app.guide_url.clone());
     let post = build_apk_post_data(
         &app.name,
         &ver.version,
         app.description.clone(),
         ver.changelog.clone(),
         ver.diff_url.clone(),
+        guide_url,
         ver.cover_image_file_id.clone(),
         tags,
         ver.submitted_by_username.clone(),

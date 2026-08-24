@@ -422,6 +422,100 @@ pub async fn handle_admin_message(
             .await?;
         }
 
+        AdminState::RepoGuide { tool_id } => {
+            let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
+                dialogue.exit().await?;
+                bot.send_message(chat_id, "⚠️ Репозиторий не найден.").await?;
+                return Ok(());
+            };
+
+            if text == "/skip" {
+                dialogue.exit().await?;
+                bot.send_message(chat_id, "ℹ️ Руководство не изменено.").await?;
+                return Ok(());
+            }
+
+            if text == "/clear" {
+                db.tools().set_tool_guide(tool_id, None, None).await?;
+                dialogue.exit().await?;
+                bot.send_message(
+                    chat_id,
+                    format!("✅ Руководство для <b>{}</b> удалено.", encode_text(&tool.full_name())),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+                return Ok(());
+            }
+
+            let (guide_url, guide_text) = if text.starts_with("http://") || text.starts_with("https://") {
+                (Some(text.clone()), None)
+            } else {
+                let url = crate::services::telegraph::publish_text_guide(&tool.full_name(), None, &text).await.ok();
+                (url, Some(text.clone()))
+            };
+
+            db.tools().set_tool_guide(tool_id, guide_url.as_deref(), guide_text.as_deref()).await?;
+            dialogue.exit().await?;
+            let link_msg = guide_url.as_deref().unwrap_or("сохранено как текст");
+            bot.send_message(
+                chat_id,
+                format!(
+                    "✅ Руководство для <b>{}</b> обновлено:\n<code>{}</code>",
+                    encode_text(&tool.full_name()),
+                    link_msg
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+
+        AdminState::AppGuide { app_id } => {
+            let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
+                dialogue.exit().await?;
+                bot.send_message(chat_id, "⚠️ Приложение не найдено.").await?;
+                return Ok(());
+            };
+
+            if text == "/skip" {
+                dialogue.exit().await?;
+                bot.send_message(chat_id, "ℹ️ Руководство не изменено.").await?;
+                return Ok(());
+            }
+
+            if text == "/clear" {
+                db.custom_apps().set_app_guide(app_id, None, None).await?;
+                dialogue.exit().await?;
+                bot.send_message(
+                    chat_id,
+                    format!("✅ Руководство для приложения <b>{}</b> удалено.", encode_text(&app.name)),
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
+                return Ok(());
+            }
+
+            let (guide_url, guide_text) = if text.starts_with("http://") || text.starts_with("https://") {
+                (Some(text.clone()), None)
+            } else {
+                let url = crate::services::telegraph::publish_text_guide(&app.name, None, &text).await.ok();
+                (url, Some(text.clone()))
+            };
+
+            db.custom_apps().set_app_guide(app_id, guide_url.as_deref(), guide_text.as_deref()).await?;
+            dialogue.exit().await?;
+            let link_msg = guide_url.as_deref().unwrap_or("сохранено как текст");
+            bot.send_message(
+                chat_id,
+                format!(
+                    "✅ Руководство для приложения <b>{}</b> обновлено:\n<code>{}</code>",
+                    encode_text(&app.name),
+                    link_msg
+                ),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+
         AdminState::NewTag => {
             if text.is_empty() {
                 bot.send_message(chat_id, "❌ Тег не может быть пустым. Отправьте название или <code>/cancel</code>.")

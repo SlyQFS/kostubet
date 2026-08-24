@@ -90,8 +90,9 @@ pub fn suggest_confirm_keyboard() -> InlineKeyboardMarkup {
         ],
         vec![
             InlineKeyboardButton::callback("📝 Описание", "sugg_desc"),
-            InlineKeyboardButton::callback("❌ Отменить", "sugg_cancel"),
+            InlineKeyboardButton::callback("📖 Гайд", "sugg_guide"),
         ],
+        vec![InlineKeyboardButton::callback("❌ Отменить", "sugg_cancel")],
     ])
 }
 
@@ -126,6 +127,10 @@ pub async fn send_suggest_confirm(
         Some(d) if !d.is_empty() => encode_text(d).into_owned(),
         _ => "не задано".to_string(),
     };
+    let guide_str = match data.guide_url.as_deref().map(str::trim) {
+        Some(g) if !g.is_empty() => encode_text(g).into_owned(),
+        _ => "не указан".to_string(),
+    };
 
     bot.send_message(
         chat_id,
@@ -134,6 +139,7 @@ pub async fn send_suggest_confirm(
             📦 <code>{}/{}</code>\n\
             🔗 https://github.com/{}/{}\n\
             📝 Описание: <i>{}</i>\n\
+            📖 Гайд: <code>{}</code>\n\
             🏷 Теги: <code>{}</code>\n\n\
             Отправить заявку?",
             encode_text(&data.owner),
@@ -141,6 +147,7 @@ pub async fn send_suggest_confirm(
             encode_text(&data.owner),
             encode_text(&data.name),
             desc_str,
+            guide_str,
             encode_text(&tags_str),
         ),
     )
@@ -190,6 +197,8 @@ pub async fn handle_suggest_message(
                 owner: repo.owner,
                 name: repo.name,
                 description: None,
+                guide_url: None,
+                guide_text: None,
                 tags: Vec::new(),
             };
 
@@ -227,6 +236,35 @@ pub async fn handle_suggest_message(
                 data.description = Some(text.clone());
             } else {
                 data.description = None;
+            }
+
+            dialogue
+                .update(DialogueState::Suggest(SuggestState::Confirm {
+                    data: data.clone(),
+                }))
+                .await?;
+
+            send_suggest_confirm(&bot, chat_id, &data).await?;
+            Ok(())
+        }
+        SuggestState::WaitingGuide { mut data } => {
+            if text != "/skip" && !text.is_empty() {
+                if text.starts_with("http://") || text.starts_with("https://") {
+                    data.guide_url = Some(text.clone());
+                } else {
+                    data.guide_text = Some(text.clone());
+                    let _ = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await;
+                    if let Ok(url) = crate::services::telegraph::publish_text_guide(
+                        &format!("{}/{}", data.owner, data.name),
+                        None,
+                        &text,
+                    ).await {
+                        data.guide_url = Some(url);
+                    }
+                }
+            } else {
+                data.guide_url = None;
+                data.guide_text = None;
             }
 
             dialogue

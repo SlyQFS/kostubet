@@ -155,6 +155,8 @@ pub async fn handle_suggest(
         owner: repo.owner,
         name: repo.name,
         description: None,
+        guide_url: None,
+        guide_text: None,
         tags,
     };
 

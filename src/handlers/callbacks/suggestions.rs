@@ -131,6 +131,17 @@ pub async fn handle_suggestion_approve(
             .await;
     }
 
+    if sugg.proposed_guide_url.is_some() || sugg.proposed_guide_text.is_some() {
+        let _ = db
+            .tools()
+            .set_tool_guide(
+                tool_id,
+                sugg.proposed_guide_url.as_deref(),
+                sugg.proposed_guide_text.as_deref(),
+            )
+            .await;
+    }
+
     let _ = db
         .audit()
         .log_action(user_id, "одобрил предложку", &sugg.full_name())

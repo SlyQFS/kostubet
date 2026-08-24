@@ -692,6 +692,7 @@ pub async fn handle_test(
             .to_string(),
         ),
         diff_url: Some("https://github.com/tokio-rs/tokio/releases/tag/tokio-1.42.0".to_string()),
+        guide_url: None,
         tags: vec![
             "async".to_string(),
             "rust".to_string(),
@@ -747,6 +748,94 @@ pub async fn handle_test(
             .await?;
         }
     }
+
+    Ok(())
+}
+
+pub async fn handle_setguide(bot: &Bot, msg: &Message, args: &str, db: &Database) -> Result<()> {
+    let chat_id = msg.chat.id;
+    let sender_id = msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0);
+
+    if !db.admins().is_admin(sender_id).await? {
+        bot.send_message(chat_id, ACCESS_DENIED)
+            .parse_mode(ParseMode::Html)
+            .await?;
+        return Ok(());
+    }
+
+    let trimmed = args.trim();
+    if trimmed.is_empty() {
+        bot.send_message(
+            chat_id,
+            "❌ Использование:\n<code>/setguide <owner/repo|slug> <url|текст></code>\n\nПример:\n<code>/setguide owner/example https://telegra.ph/Example-Guide</code>\n<code>/setguide myapp 1. Установите APK 2. Нажмите Старт</code>",
+        )
+        .parse_mode(ParseMode::Html)
+        .await?;
+        return Ok(());
+    }
+
+    let mut parts = trimmed.splitn(2, |c: char| c.is_whitespace());
+    let target = parts.next().unwrap_or("");
+    let content = parts.next().unwrap_or("").trim();
+
+    if target.is_empty() || content.is_empty() {
+        bot.send_message(
+            chat_id,
+            "❌ Укажите инструмент/приложение и текст или ссылку руководства.",
+        )
+        .parse_mode(ParseMode::Html)
+        .await?;
+        return Ok(());
+    }
+
+    // Try finding tracked GitHub repo first
+    if let Some(repo) = RepoConfig::parse_ref(target) {
+        if let Some(tool) = db.tools().get_tool(&repo.owner, &repo.name).await? {
+            let (guide_url, guide_text) = if content.starts_with("http://") || content.starts_with("https://") {
+                (Some(content.to_string()), None)
+            } else {
+                let url = crate::services::telegraph::publish_text_guide(&repo.full_name(), None, content).await.ok();
+                (url, Some(content.to_string()))
+            };
+
+            db.tools().set_tool_guide(tool.id, guide_url.as_deref(), guide_text.as_deref()).await?;
+            let link_msg = guide_url.as_deref().unwrap_or("сохранен как текст");
+            bot.send_message(
+                chat_id,
+                format!("✅ Руководство для <b>{}</b> успешно обновлено:\n<code>{}</code>", repo.full_name(), link_msg),
+            )
+            .parse_mode(ParseMode::Html)
+            .await?;
+            return Ok(());
+        }
+    }
+
+    // Try finding custom app by slug
+    if let Some(app) = db.custom_apps().get_app_by_slug(target).await? {
+        let (guide_url, guide_text) = if content.starts_with("http://") || content.starts_with("https://") {
+            (Some(content.to_string()), None)
+        } else {
+            let url = crate::services::telegraph::publish_text_guide(&app.name, None, content).await.ok();
+            (url, Some(content.to_string()))
+        };
+
+        db.custom_apps().set_app_guide(app.id, guide_url.as_deref(), guide_text.as_deref()).await?;
+        let link_msg = guide_url.as_deref().unwrap_or("сохранен как текст");
+        bot.send_message(
+            chat_id,
+            format!("✅ Руководство для приложения <b>{}</b> (<code>{}</code>) успешно обновлено:\n<code>{}</code>", app.name, app.slug, link_msg),
+        )
+        .parse_mode(ParseMode::Html)
+        .await?;
+        return Ok(());
+    }
+
+    bot.send_message(
+        chat_id,
+        format!("❌ Инструмент или приложение «{}» не найдено в базе данных.", target),
+    )
+    .parse_mode(ParseMode::Html)
+    .await?;
 
     Ok(())
 }

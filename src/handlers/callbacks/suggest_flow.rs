@@ -21,6 +21,8 @@ async fn file_suggestion(
     name: &str,
     tags: &[String],
     description: Option<&str>,
+    guide_url: Option<&str>,
+    guide_text: Option<&str>,
 ) -> Result<()> {
     let tags_str = if tags.is_empty() {
         None
@@ -42,6 +44,8 @@ async fn file_suggestion(
             name,
             tags_str.as_deref(),
             description,
+            guide_url,
+            guide_text,
         )
         .await?;
 
@@ -86,15 +90,24 @@ async fn file_suggestion(
         None => String::new(),
     };
 
+    let guide_note = match guide_url {
+        Some(g) if !g.is_empty() => format!(
+            "\n📖 Гайд: <code>{}</code>",
+            html_escape::encode_text(g.trim())
+        ),
+        _ => String::new(),
+    };
+
     let admin_notice = format!(
         "💡 <b>Новая заявка на отслеживание репозитория #{}</b>\n\
-        📦 Репозиторий: <code>{}/{}</code>{}\n\
+        📦 Репозиторий: <code>{}/{}</code>{}{}\n\
         🏷️ Предложенные теги: <code>{}</code>\n\
         👤 Автор: {}",
         sugg_id,
         owner,
         name,
         desc_note,
+        guide_note,
         tags_str.as_deref().unwrap_or("нет"),
         user_info
     );
@@ -157,6 +170,8 @@ pub async fn handle_suggest_flow(
                 &data.name,
                 &data.tags,
                 data.description.as_deref(),
+                data.guide_url.as_deref(),
+                data.guide_text.as_deref(),
             )
             .await
         }
@@ -182,6 +197,28 @@ pub async fn handle_suggest_flow(
             }
             Ok(())
         }
+        ("guide", SuggestState::Confirm { data }) => {
+            let cur_guide = data.guide_url.clone().unwrap_or_default();
+            dialogue
+                .update(DialogueState::Suggest(SuggestState::WaitingGuide { data }))
+                .await?;
+            if let Some(msg) = &q.message {
+                let _ = bot
+                    .edit_message_text(
+                        msg.chat().id,
+                        msg.id(),
+                        format!(
+                            "📖 Введите текст инструкции (бот опубликует на Telegraph) или готовую ссылку.\n\
+                            Текущая: <code>{}</code>",
+                            html_escape::encode_text(cur_guide.trim())
+                        ),
+                    )
+                    .reply_markup(crate::dialogue::suggest::skip_or_cancel_keyboard())
+                    .parse_mode(ParseMode::Html)
+                    .await;
+            }
+            Ok(())
+        }
         ("tags", SuggestState::Confirm { data }) => {
             dialogue
                 .update(DialogueState::Suggest(SuggestState::WaitingTags { data }))
@@ -199,19 +236,9 @@ pub async fn handle_suggest_flow(
             }
             Ok(())
         }
-        ("skip", SuggestState::WaitingDescription { data }) => {
-            dialogue
-                .update(DialogueState::Suggest(SuggestState::Confirm {
-                    data: data.clone(),
-                }))
-                .await?;
-            if let Some(msg) = &q.message {
-                let _ = bot.delete_message(msg.chat().id, msg.id()).await;
-                crate::dialogue::suggest::send_suggest_confirm(bot, msg.chat().id, &data).await?;
-            }
-            Ok(())
-        }
-        ("skip", SuggestState::WaitingTags { data }) => {
+        ("skip", SuggestState::WaitingDescription { data })
+        | ("skip", SuggestState::WaitingGuide { data })
+        | ("skip", SuggestState::WaitingTags { data }) => {
             dialogue
                 .update(DialogueState::Suggest(SuggestState::Confirm {
                     data: data.clone(),

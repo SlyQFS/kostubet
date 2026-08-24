@@ -23,6 +23,8 @@ pub struct PostData {
     pub description: Option<String>,
     pub body: Option<String>,
     pub diff_url: Option<String>,
+    /// Optional Telegraph or external guide URL.
+    pub guide_url: Option<String>,
     pub tags: Vec<String>,
     pub cover_image: Option<String>, // file_id or URL
     pub download_buttons: Vec<(String, DownloadTarget)>,
@@ -40,6 +42,7 @@ pub fn build_apk_post_data(
     description: Option<String>,
     changelog: Option<String>,
     diff_url: Option<String>,
+    guide_url: Option<String>,
     cover_image: Option<String>,
     tags: Vec<String>,
     suggested_by: Option<String>,
@@ -49,6 +52,7 @@ pub fn build_apk_post_data(
         description,
         body: changelog,
         diff_url,
+        guide_url,
         tags,
         cover_image,
         download_buttons: Vec::new(),
@@ -470,11 +474,14 @@ pub fn render_post_text(post: &PostData) -> String {
 }
 
 pub fn render_post_keyboard(post: &PostData) -> Option<InlineKeyboardMarkup> {
-    if post.download_buttons.is_empty() {
-        return None;
+    let mut rows = Vec::new();
+
+    if let Some(ref guide_url) = post.guide_url {
+        if let Ok(url) = reqwest::Url::parse(guide_url) {
+            rows.push(vec![InlineKeyboardButton::url("📖 Гайд", url)]);
+        }
     }
 
-    let mut rows = Vec::new();
     for (label, target) in &post.download_buttons {
         let btn = match target {
             DownloadTarget::Url(url) => InlineKeyboardButton::url(
@@ -486,7 +493,11 @@ pub fn render_post_keyboard(post: &PostData) -> Option<InlineKeyboardMarkup> {
         rows.push(vec![btn]);
     }
 
-    Some(InlineKeyboardMarkup::new(rows))
+    if rows.is_empty() {
+        None
+    } else {
+        Some(InlineKeyboardMarkup::new(rows))
+    }
 }
 
 /// Executes a single Telegram API call with backoff retry on `RequestError::RetryAfter`.
@@ -815,6 +826,7 @@ mod tests {
             diff_url: Some(
                 "https://github.com/tokio-rs/tokio/compare/v1.39.0...v1.40.0".to_string(),
             ),
+            guide_url: None,
             tags: vec!["async".to_string(), "rust".to_string()],
             cover_image: None,
             download_buttons: vec![(
@@ -843,6 +855,7 @@ mod tests {
             description: Some(long_desc),
             body: None,
             diff_url: None,
+            guide_url: None,
             tags: vec![],
             cover_image: None,
             download_buttons: vec![],
@@ -889,6 +902,7 @@ mod tests {
             Some("VPN client for Android".to_string()),
             Some("Fixed bugs".to_string()),
             Some("https://github.com/2dust/v2rayNG".to_string()),
+            Some("https://telegra.ph/V2RayNG-Guide".to_string()),
             Some("file_img_123".to_string()),
             vec!["vpn".to_string(), "android".to_string()],
             Some("kostubet".to_string()),
@@ -896,11 +910,16 @@ mod tests {
 
         assert_eq!(post.title, "V2RayNG v1.8.5");
         assert_eq!(post.description.as_deref(), Some("VPN client for Android"));
+        assert_eq!(post.guide_url.as_deref(), Some("https://telegra.ph/V2RayNG-Guide"));
         assert_eq!(post.tags, vec!["vpn", "android"]);
         assert_eq!(post.cover_image, Some("file_img_123".to_string()));
         assert_eq!(post.suggested_by.as_deref(), Some("kostubet"));
-        // APK files are delivered as documents after the card, not as buttons.
+        // APK files are delivered as documents after the card, not as download buttons.
         assert!(post.download_buttons.is_empty());
+
+        let kb = render_post_keyboard(&post).expect("Keyboard should be rendered for guide_url");
+        assert_eq!(kb.inline_keyboard.len(), 1);
+        assert_eq!(kb.inline_keyboard[0][0].text, "📖 Гайд");
     }
 
     #[test]
@@ -971,6 +990,7 @@ mod tests {
             description: None,
             body: Some(long_md),
             diff_url: None,
+            guide_url: None,
             tags: vec![],
             cover_image: None,
             download_buttons: vec![],
@@ -1006,6 +1026,7 @@ mod tests {
             description: None,
             body: Some("See ![screenshot](https://ex.com/1.png) changes".to_string()),
             diff_url: None,
+            guide_url: None,
             tags: vec![],
             cover_image: None,
             download_buttons: vec![],

@@ -12,6 +12,29 @@ use html_escape::encode_text;
 use teloxide::prelude::*;
 use teloxide::types::{InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
 
+/// Keyboards for editing APK dialogue steps.
+pub fn edit_skip_clear_cancel_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("⏩ Пропустить", "edit_flow:skip"),
+        InlineKeyboardButton::callback("🗑 Очистить", "edit_flow:clear"),
+        InlineKeyboardButton::callback("❌ Отменить", "edit_flow:cancel"),
+    ]])
+}
+
+pub fn edit_skip_or_cancel_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("⏩ Пропустить", "edit_flow:skip"),
+        InlineKeyboardButton::callback("❌ Отменить", "edit_flow:cancel"),
+    ]])
+}
+
+#[allow(dead_code)]
+pub fn edit_cancel_keyboard() -> InlineKeyboardMarkup {
+    InlineKeyboardMarkup::new(vec![vec![
+        InlineKeyboardButton::callback("❌ Отменить", "edit_flow:cancel"),
+    ]])
+}
+
 #[tracing::instrument(skip(bot, dialogue, _db))]
 pub async fn handle_edit_message(
     bot: Bot,
@@ -52,11 +75,11 @@ pub async fn handle_edit_message(
                 chat_id,
                 format!(
                     "📝 <b>Текущее описание приложения:</b>\n<i>{}</i>\n\n\
-                    Введите новое описание (что это за приложение) или отправьте:\n\
-                    <code>/skip</code> — оставить как есть, <code>/clear</code> — удалить:",
+                    Введите новое описание (что это за приложение) или используйте кнопки ниже:",
                     encode_text(&cur_desc)
                 ),
             )
+            .reply_markup(edit_skip_clear_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -69,6 +92,7 @@ pub async fn handle_edit_message(
                         chat_id,
                         format!("{}\n\nПовторите ввод, <code>/skip</code> или <code>/clear</code>.", err),
                     )
+                    .reply_markup(edit_skip_clear_cancel_keyboard())
                     .parse_mode(ParseMode::Html)
                     .await?;
                     return Ok(());
@@ -90,10 +114,11 @@ pub async fn handle_edit_message(
                 chat_id,
                 format!(
                     "📝 <b>Текущий список изменений (Changelog):</b>\n<code>{}</code>\n\n\
-                    Введите новый список изменений, <code>/skip</code> — оставить как есть, <code>/clear</code> — убрать:",
+                    Введите новый список изменений или используйте кнопки:",
                     encode_text(&cur_changelog)
                 ),
             )
+            .reply_markup(edit_skip_clear_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -118,10 +143,11 @@ pub async fn handle_edit_message(
                 chat_id,
                 format!(
                     "🔗 <b>Текущая ссылка на изменения (Diff URL):</b>\n<code>{}</code>\n\n\
-                    Введите новую ссылку, <code>/skip</code> — оставить как есть, <code>/clear</code> — убрать ссылку из карточки:",
+                    Введите новую ссылку или используйте кнопки:",
                     encode_text(&cur_diff)
                 ),
             )
+            .reply_markup(edit_skip_clear_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -130,6 +156,46 @@ pub async fn handle_edit_message(
                 data.diff_url = None;
             } else if text != "/skip" && !text.is_empty() {
                 data.diff_url = Some(text.to_string());
+            }
+
+            let cur_guide = data
+                .guide_url
+                .clone()
+                .unwrap_or_else(|| "не указан".to_string());
+
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingGuide { data }))
+                .await?;
+
+            bot.send_message(
+                chat_id,
+                format!(
+                    "📖 <b>Текущий гайд / инструкция:</b>\n<code>{}</code>\n\n\
+                    Введите новый текст инструкции или ссылку на Telegraph:",
+                    encode_text(&cur_guide)
+                ),
+            )
+            .reply_markup(edit_skip_clear_cancel_keyboard())
+            .parse_mode(ParseMode::Html)
+            .await?;
+        }
+        EditApkState::EditingGuide { mut data } => {
+            if text == "/clear" {
+                data.guide_url = None;
+                data.guide_text = None;
+            } else if text != "/skip" && !text.is_empty() {
+                if text.starts_with("http://") || text.starts_with("https://") {
+                    data.guide_url = Some(text.to_string());
+                } else {
+                    data.guide_text = Some(text.to_string());
+                    if let Ok(url) = crate::services::telegraph::publish_text_guide(
+                        &data.app_name,
+                        data.submitted_by_username.as_deref(),
+                        text,
+                    ).await {
+                        data.guide_url = Some(url);
+                    }
+                }
             }
 
             let cur_tags = if data.tags.is_empty() {
@@ -145,10 +211,11 @@ pub async fn handle_edit_message(
             bot.send_message(
                 chat_id,
                 format!(
-                    "🏷️ <b>Текущие теги:</b> <code>{}</code>\n\nВведите новые теги через пробел/запятую или отправьте <code>/skip</code>:",
+                    "🏷️ <b>Текущие теги:</b> <code>{}</code>\n\nВведите новые теги через пробел/запятую:",
                     encode_text(&cur_tags)
                 ),
             )
+            .reply_markup(edit_skip_or_cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -168,6 +235,7 @@ pub async fn handle_edit_message(
                 data.description.clone(),
                 data.changelog.clone(),
                 data.diff_url.clone(),
+                data.guide_url.clone(),
                 data.cover_image_file_id.clone(),
                 data.tags.clone(),
                 data.submitted_by_username.clone(),

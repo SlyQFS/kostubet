@@ -25,6 +25,11 @@ pub struct TrackedToolRecord {
     pub suggested_by: Option<String>,
     /// Optional comma-separated list of Telegram message IDs from the last published release.
     pub last_message_ids: Option<String>,
+    /// Optional Telegraph or external guide URL.
+    pub guide_url: Option<String>,
+    /// Optional raw guide text.
+    #[allow(dead_code)]
+    pub guide_text: Option<String>,
 }
 
 impl TrackedToolRecord {
@@ -45,6 +50,8 @@ impl TrackedToolRecord {
             description: r.get("description"),
             suggested_by: r.get("suggested_by"),
             last_message_ids: r.try_get("last_message_ids").unwrap_or(None),
+            guide_url: r.try_get("guide_url").unwrap_or(None),
+            guide_text: r.try_get("guide_text").unwrap_or(None),
         }
     }
 }
@@ -119,6 +126,23 @@ impl<'a> ToolsRepo<'a> {
         Ok(())
     }
 
+    /// Sets or clears guide_url and guide_text for a tracked tool.
+    pub async fn set_tool_guide(
+        &self,
+        id: i64,
+        guide_url: Option<&str>,
+        guide_text: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query("UPDATE tracked_tools SET guide_url = ?, guide_text = ? WHERE id = ?")
+            .bind(guide_url)
+            .bind(guide_text)
+            .bind(id)
+            .execute(self.pool)
+            .await
+            .context("Failed to update tracked tool guide")?;
+        Ok(())
+    }
+
     pub async fn remove_tool(&self, owner: &str, repo: &str) -> Result<bool> {
         if let Some(tool) = self.get_tool(owner, repo).await? {
             // Delete associated item_tags first
@@ -142,7 +166,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool(&self, owner: &str, repo: &str) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids, guide_url, guide_text
             FROM tracked_tools
             WHERE owner = ? AND repo = ?
             "#,
@@ -159,7 +183,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool_by_id(&self, id: i64) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids, guide_url, guide_text
             FROM tracked_tools
             WHERE id = ?
             "#,
@@ -175,7 +199,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn list_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids, guide_url, guide_text
             FROM tracked_tools
             ORDER BY owner ASC, repo ASC
             "#,
@@ -266,7 +290,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn list_failing_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids, guide_url, guide_text
             FROM tracked_tools
             WHERE fail_count > 0
             ORDER BY fail_count DESC, owner ASC

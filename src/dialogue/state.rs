@@ -26,6 +26,12 @@ pub struct SubmitApkData {
     pub title: Option<String>,
     pub changelog: Option<String>,
     pub diff_url: Option<String>,
+    /// Optional Telegraph or external guide URL.
+    pub guide_url: Option<String>,
+    /// Optional raw quick guide text.
+    pub guide_text: Option<String>,
+    /// Step accumulator for step-by-step illustrated guides.
+    pub pending_guide_steps: Vec<crate::services::telegraph::GuideStep>,
     /// Raw uploaded screenshot file_ids before collage stitching.
     pub raw_cover_file_ids: Vec<String>,
     pub cover_image_file_id: Option<String>,
@@ -52,6 +58,18 @@ pub enum SubmitApkState {
         data: Box<SubmitApkData>,
     },
     WaitingDiffUrl {
+        data: Box<SubmitApkData>,
+    },
+    WaitingGuideMode {
+        data: Box<SubmitApkData>,
+    },
+    WaitingGuideText {
+        data: Box<SubmitApkData>,
+    },
+    CollectingGuideSteps {
+        data: Box<SubmitApkData>,
+    },
+    WaitingGuideUrl {
         data: Box<SubmitApkData>,
     },
     WaitingCover {
@@ -83,6 +101,8 @@ pub struct EditApkData {
     pub title: Option<String>,
     pub changelog: Option<String>,
     pub diff_url: Option<String>,
+    pub guide_url: Option<String>,
+    pub guide_text: Option<String>,
     pub cover_image_file_id: Option<String>,
     pub tags: Vec<String>,
     pub submitted_by_username: Option<String>,
@@ -94,6 +114,7 @@ pub enum EditApkState {
     EditingDescription { data: Box<EditApkData> },
     EditingChangelog { data: Box<EditApkData> },
     EditingDiffUrl { data: Box<EditApkData> },
+    EditingGuide { data: Box<EditApkData> },
     EditingTags { data: Box<EditApkData> },
     ConfirmEdit { data: Box<EditApkData> },
 }
@@ -123,9 +144,13 @@ pub enum AdminState {
     /// Waiting for a new description for an existing tracked repo
     /// (text sets it, `/skip` keeps it, `/clear` removes it).
     RepoDescription { tool_id: i64 },
+    /// Waiting for a guide URL or guide text for an existing tracked repo.
+    RepoGuide { tool_id: i64 },
     /// Waiting for a new app-level description of a custom app
     /// (text sets it, `/skip` keeps it, `/clear` removes it).
     AppDescription { app_id: i64 },
+    /// Waiting for a guide URL or guide text for a custom app.
+    AppGuide { app_id: i64 },
     /// Waiting for a new global tag name.
     NewTag,
     /// Waiting for a tag name that is also attached to an item ("tool"/"custom_app").
@@ -144,6 +169,8 @@ pub struct SuggestData {
     pub name: String,
     /// Optional description proposed by the author (or `/skip`).
     pub description: Option<String>,
+    pub guide_url: Option<String>,
+    pub guide_text: Option<String>,
     pub tags: Vec<String>,
 }
 
@@ -155,6 +182,8 @@ pub enum SuggestState {
     Confirm { data: Box<SuggestData> },
     /// Waiting for the description text (or `/skip`).
     WaitingDescription { data: Box<SuggestData> },
+    /// Waiting for the guide text/link (or `/skip`).
+    WaitingGuide { data: Box<SuggestData> },
     /// Waiting for space-separated tags (or `/skip`).
     WaitingTags { data: Box<SuggestData> },
 }
