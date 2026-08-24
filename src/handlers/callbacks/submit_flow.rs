@@ -23,6 +23,7 @@ pub async fn handle_submit_mode_new(
             msg.chat().id,
             "📝 Введите название нового приложения (например, <i>V2RayNG</i>):",
         )
+        .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
         .parse_mode(ParseMode::Html)
         .await?;
     }
@@ -46,6 +47,7 @@ pub async fn handle_submit_mode_update(
                 msg.chat().id,
                 "📭 В каталоге пока нет опубликованных приложений.\n\n📝 Введите название нового приложения:",
             )
+            .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
             .parse_mode(ParseMode::Html)
             .await?;
         }
@@ -351,6 +353,7 @@ pub async fn handle_slug_rename(
                 msg.id(),
                 "✏️ Введите другое название приложения:",
             )
+            .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
             .await;
     }
     Ok(())

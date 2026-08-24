@@ -23,6 +23,8 @@ pub struct TrackedToolRecord {
     pub description: Option<String>,
     /// Optional username who suggested the tool.
     pub suggested_by: Option<String>,
+    /// Optional comma-separated list of Telegram message IDs from the last published release.
+    pub last_message_ids: Option<String>,
 }
 
 impl TrackedToolRecord {
@@ -42,6 +44,7 @@ impl TrackedToolRecord {
             added_at: r.get("added_at"),
             description: r.get("description"),
             suggested_by: r.get("suggested_by"),
+            last_message_ids: r.try_get("last_message_ids").unwrap_or(None),
         }
     }
 }
@@ -139,7 +142,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool(&self, owner: &str, repo: &str) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids
             FROM tracked_tools
             WHERE owner = ? AND repo = ?
             "#,
@@ -156,7 +159,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn get_tool_by_id(&self, id: i64) -> Result<Option<TrackedToolRecord>> {
         let row = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids
             FROM tracked_tools
             WHERE id = ?
             "#,
@@ -172,7 +175,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn list_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids
             FROM tracked_tools
             ORDER BY owner ASC, repo ASC
             "#,
@@ -203,6 +206,31 @@ impl<'a> ToolsRepo<'a> {
         .execute(self.pool)
         .await
         .context("Failed to update last_release and etag")?;
+
+        Ok(())
+    }
+
+    pub async fn update_last_release_etag_and_messages(
+        &self,
+        id: i64,
+        last_release: Option<&str>,
+        etag: Option<&str>,
+        last_message_ids: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE tracked_tools
+            SET last_release = ?, etag = ?, last_message_ids = ?, fail_count = 0
+            WHERE id = ?
+            "#,
+        )
+        .bind(last_release)
+        .bind(etag)
+        .bind(last_message_ids)
+        .bind(id)
+        .execute(self.pool)
+        .await
+        .context("Failed to update last_release, etag, and last_message_ids")?;
 
         Ok(())
     }
@@ -238,7 +266,7 @@ impl<'a> ToolsRepo<'a> {
     pub async fn list_failing_tools(&self) -> Result<Vec<TrackedToolRecord>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by
+            SELECT id, owner, repo, last_release, etag, fail_count, added_by, added_at, description, suggested_by, last_message_ids
             FROM tracked_tools
             WHERE fail_count > 0
             ORDER BY fail_count DESC, owner ASC

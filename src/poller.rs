@@ -8,7 +8,7 @@ use crate::config::Config;
 use crate::db::tags::ItemType;
 use crate::db::Database;
 use crate::services::github::{CheckResult, GithubClient};
-use crate::services::render::{send_post, DownloadTarget, PostData};
+use crate::services::render::{DownloadTarget, PostData};
 use anyhow::Result;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::time::Duration;
@@ -92,6 +92,22 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                         })
                                         .collect();
 
+                                    // Delete previous release messages for this tool to prevent chat clutter
+                                    if !config.dry_run {
+                                        if let Some(ref prev_ids_str) = tool.last_message_ids {
+                                            for id_str in prev_ids_str.split(',') {
+                                                if let Ok(mid) = id_str.trim().parse::<i32>() {
+                                                    let _ = bot
+                                                        .delete_message(
+                                                            teloxide::types::ChatId(config.chat_id),
+                                                            teloxide::types::MessageId(mid),
+                                                        )
+                                                        .await;
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     let post = PostData {
                                         title: format!(
                                             "{}/{} • {}",
@@ -106,7 +122,7 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                         suggested_by: tool.suggested_by.clone(),
                                     };
 
-                                    match send_post(
+                                    match crate::services::render::send_post_full(
                                         &bot,
                                         config.chat_id,
                                         config.archive_thread_id,
@@ -114,7 +130,7 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                     )
                                     .await
                                     {
-                                        Ok(_) => {
+                                        Ok(msg_ids) => {
                                             info!(
                                                 "Карточка успешно отправлена в Telegram для {}/{}",
                                                 tool.owner, tool.repo
@@ -132,12 +148,18 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                                 // full re-fetches every cycle.
                                                 let etag_to_store =
                                                     update.etag.as_deref().or(tool.etag.as_deref());
+                                                let msg_ids_str = msg_ids
+                                                    .iter()
+                                                    .map(|id| id.to_string())
+                                                    .collect::<Vec<_>>()
+                                                    .join(",");
                                                 if let Err(e) = db
                                                     .tools()
-                                                    .update_last_release_and_etag(
+                                                    .update_last_release_etag_and_messages(
                                                         tool.id,
                                                         Some(&update.id),
                                                         etag_to_store,
+                                                        Some(&msg_ids_str),
                                                     )
                                                     .await
                                                 {

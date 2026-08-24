@@ -108,15 +108,16 @@ impl Database {
 
             -- Tracked GitHub tools
             CREATE TABLE IF NOT EXISTS tracked_tools (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                owner        TEXT NOT NULL,
-                repo         TEXT NOT NULL,
-                last_release TEXT,
-                etag         TEXT,
-                added_by     INTEGER NOT NULL DEFAULT 0,
-                added_at     TEXT NOT NULL,
-                description  TEXT,
-                suggested_by TEXT,
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                owner            TEXT NOT NULL,
+                repo             TEXT NOT NULL,
+                last_release     TEXT,
+                etag             TEXT,
+                added_by         INTEGER NOT NULL DEFAULT 0,
+                added_at         TEXT NOT NULL,
+                description      TEXT,
+                suggested_by     TEXT,
+                last_message_ids TEXT,
                 UNIQUE(owner, repo)
             );
 
@@ -232,6 +233,7 @@ impl Database {
         for (table, column) in [
             ("tracked_tools", "description"),
             ("tracked_tools", "suggested_by"),
+            ("tracked_tools", "last_message_ids"),
             ("suggestions", "proposed_description"),
             ("custom_apps", "description"),
             ("custom_app_versions", "submitted_by_username"),
@@ -511,6 +513,13 @@ mod tests {
         let tool = db.tools().get_tool("tokio-rs", "tokio").await?.unwrap();
         assert_eq!(tool.description, None);
         assert_eq!(tool.suggested_by, None);
+        assert_eq!(tool.last_message_ids, None);
+
+        db.tools()
+            .update_last_release_etag_and_messages(tool.id, Some("v1.0"), Some("W/123"), Some("101,102"))
+            .await?;
+        let updated = db.tools().get_tool("tokio-rs", "tokio").await?.unwrap();
+        assert_eq!(updated.last_message_ids.as_deref(), Some("101,102"));
 
         let tool_id = db
             .tools()

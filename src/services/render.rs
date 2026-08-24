@@ -33,6 +33,7 @@ pub struct PostData {
 /// Helper function to construct unified `PostData` for custom APK releases.
 /// APK files themselves are delivered as documents right after the card
 /// (see `send_apk_documents`), so the card carries no download buttons.
+#[allow(clippy::too_many_arguments)]
 pub fn build_apk_post_data(
     app_name: &str,
     version: &str,
@@ -559,6 +560,45 @@ pub async fn send_post(
     send_text_card(bot, chat_id, thread_id, &text, kb).await
 }
 
+/// Dispatches the release card and returns all Telegram message IDs generated
+/// (e.g. `vec![msg_id]` or `vec![photo_id, text_id]` if separated), so that
+/// previous releases can be cleanly deleted on new updates.
+pub async fn send_post_full(
+    bot: &Bot,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    post: &PostData,
+) -> anyhow::Result<Vec<i32>> {
+    let _ = bot
+        .send_chat_action(ChatId(chat_id), ChatAction::Typing)
+        .await;
+
+    let text = render_post_text(post);
+    let kb = render_post_keyboard(post);
+
+    if let Some(ref cover) = post.cover_image {
+        let photo_result = match build_cover_input_file(cover) {
+            Some(input_file) => {
+                send_photo_card_full(bot, chat_id, thread_id, &input_file, &text, &post.title, kb.as_ref())
+                    .await
+            }
+            None => Err(anyhow::anyhow!("invalid cover reference")),
+        };
+
+        if let Ok(ids) = photo_result {
+            return Ok(ids);
+        } else if let Err(e) = photo_result {
+            tracing::warn!(
+                "Photo card send failed ({}); falling back to text-only card",
+                e
+            );
+        }
+    }
+
+    let msg = send_text_card(bot, chat_id, thread_id, &text, kb).await?;
+    Ok(vec![msg.id.0])
+}
+
 /// Builds a Telegram input file from a cover reference (URL or bot file_id).
 fn build_cover_input_file(cover: &str) -> Option<InputFile> {
     if cover.starts_with("http://") || cover.starts_with("https://") {
@@ -624,6 +664,61 @@ async fn send_photo_card(
     .await?;
 
     send_text_card(bot, chat_id, thread_id, text, kb.cloned()).await
+}
+
+async fn send_photo_card_full(
+    bot: &Bot,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    input_file: &InputFile,
+    text: &str,
+    title: &str,
+    kb: Option<&InlineKeyboardMarkup>,
+) -> anyhow::Result<Vec<i32>> {
+    if text.chars().count() <= 1024 {
+        let bot_clone = bot.clone();
+        let input_file_clone = input_file.clone();
+        let text_clone = text.to_string();
+        let kb_clone = kb.cloned();
+
+        let msg = execute_telegram_with_retry(|| {
+            let mut req = bot_clone
+                .send_photo(ChatId(chat_id), input_file_clone.clone())
+                .caption(text_clone.clone())
+                .parse_mode(ParseMode::Html);
+
+            if let Some(tid) = thread_id {
+                req = req.message_thread_id(ThreadId(MessageId(tid as i32)));
+            }
+            if let Some(ref keyboard) = kb_clone {
+                req = req.reply_markup(keyboard.clone());
+            }
+            req.send()
+        })
+        .await?;
+
+        return Ok(vec![msg.id.0]);
+    }
+
+    let short_caption = format!("🆕 <b>{}</b>", encode_text(title));
+    let bot_clone = bot.clone();
+    let input_file_clone = input_file.clone();
+
+    let photo_msg = execute_telegram_with_retry(|| {
+        let mut photo_req = bot_clone
+            .send_photo(ChatId(chat_id), input_file_clone.clone())
+            .caption(short_caption.clone())
+            .parse_mode(ParseMode::Html);
+
+        if let Some(tid) = thread_id {
+            photo_req = photo_req.message_thread_id(ThreadId(MessageId(tid as i32)));
+        }
+        photo_req.send()
+    })
+    .await?;
+
+    let text_msg = send_text_card(bot, chat_id, thread_id, text, kb.cloned()).await?;
+    Ok(vec![photo_msg.id.0, text_msg.id.0])
 }
 
 /// Sends the text card (with the download keyboard attached).
