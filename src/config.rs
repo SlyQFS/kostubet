@@ -38,7 +38,8 @@ impl RepoConfig {
 
     fn valid_github_segment(seg: &str) -> bool {
         !seg.is_empty()
-            && seg.chars()
+            && seg
+                .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     }
 

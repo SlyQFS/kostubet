@@ -19,6 +19,9 @@ pub enum DownloadTarget {
 #[derive(Debug, Clone)]
 pub struct PostData {
     pub title: String,
+    /// Optional URL of the GitHub repository. When present, the repo part of
+    /// the title is rendered as a clickable link.
+    pub repo_url: Option<String>,
     /// Optional short description of the repo/app, shown under the title.
     pub description: Option<String>,
     pub body: Option<String>,
@@ -49,6 +52,7 @@ pub fn build_apk_post_data(
 ) -> PostData {
     PostData {
         title: format!("{} v{}", app_name, version),
+        repo_url: None,
         description,
         body: changelog,
         diff_url,
@@ -182,7 +186,8 @@ fn parse_inline_markdown(text: &str) -> String {
         // snake_case identifiers must stay literal).
         if (rest.starts_with('*') || rest.starts_with('_')) && rest.len() >= 2 {
             let delim = &rest[..1];
-            let word_inner = delim == "_" && out.chars().last().is_some_and(|c| c.is_alphanumeric());
+            let word_inner =
+                delim == "_" && out.chars().last().is_some_and(|c| c.is_alphanumeric());
             if !word_inner {
                 if let Some(close_italic) = rest[1..].find(delim) {
                     let inner = &rest[1..1 + close_italic];
@@ -383,10 +388,7 @@ fn render_body_limited(md: &str, max_chars: usize) -> (String, bool) {
 
         let mut truncated: String = src.chars().take(cut).collect();
         // Roll back to a whitespace boundary so no word/markdown token is split.
-        while truncated
-            .chars()
-            .last()
-            .is_some_and(|c| !c.is_whitespace())
+        while truncated.chars().last().is_some_and(|c| !c.is_whitespace())
             && truncated.chars().count() > 50
         {
             truncated.pop();
@@ -401,14 +403,81 @@ fn render_body_limited(md: &str, max_chars: usize) -> (String, bool) {
 }
 
 // Order of card sections:
-// 1. Title (🆕 <b>...</b>)
+// 1. Title (🆕 <b>...</b>, repo part linked when `repo_url` is set)
 // 2. Description (📝 <i>...</i>)
 // 3. Body (<blockquote expandable>...</blockquote>)
 // 4. Diff URL (🔗 <a href="...">...</a>)
 // 5. Tags (#tag1 #tag2)
 // 6. Download buttons (InlineKeyboardMarkup)
+
+/// Renders the escaped card title. When `repo_url` is set and the title
+/// follows the tool-card convention `owner/repo • version`, the `owner/repo`
+/// part becomes a clickable link to the repository.
+fn render_title_html(post: &PostData) -> String {
+    let Some(ref url) = post.repo_url else {
+        return encode_text(&post.title).into_owned();
+    };
+    match post.title.split_once(" • ") {
+        Some((repo_part, rest)) => format!(
+            "<a href=\"{}\">{}</a> • {}",
+            encode_text(url),
+            encode_text(repo_part),
+            encode_text(rest)
+        ),
+        None => format!(
+            "<a href=\"{}\">{}</a>",
+            encode_text(url),
+            encode_text(&post.title)
+        ),
+    }
+}
+
+/// Renders the card so that the whole text (title, description, body,
+/// links, tags) fits into `max_chars` — used for photo captions (Telegram
+/// limit 1024). The body is progressively truncated, metadata is always
+/// kept. Returns `None` when even the metadata alone doesn't fit.
+pub fn render_post_text_limited(post: &PostData, max_chars: usize) -> Option<String> {
+    let full = render_post_text(post);
+    if full.chars().count() <= max_chars {
+        return Some(full);
+    }
+
+    let orig_body_len = post.body.as_ref().map(|b| b.chars().count()).unwrap_or(0);
+    let note = "\n\n<i>... [описание обрезано]</i>";
+    let mut budget = orig_body_len;
+    while budget > 0 {
+        let mut truncated = post.clone();
+        let body: String = post
+            .body
+            .as_deref()
+            .unwrap_or("")
+            .chars()
+            .take(budget)
+            .collect();
+        truncated.body = Some(body.trim_end().to_string());
+
+        let mut rendered = render_post_text(&truncated);
+        if budget < orig_body_len {
+            rendered.push_str(note);
+        }
+        if rendered.chars().count() <= max_chars {
+            return Some(rendered);
+        }
+        budget /= 2;
+    }
+
+    // Body alone can't rescue the caption — try without it entirely.
+    let mut no_body = post.clone();
+    no_body.body = None;
+    let rendered = render_post_text(&no_body);
+    if rendered.chars().count() <= max_chars {
+        return Some(rendered);
+    }
+    None
+}
+
 pub fn render_post_text(post: &PostData) -> String {
-    let mut card = format!("🆕 <b>{}</b>", encode_text(&post.title));
+    let mut card = format!("🆕 <b>{}</b>", render_title_html(post));
 
     if let Some(ref description) = post.description {
         let trimmed = description.trim();
@@ -543,7 +612,6 @@ pub async fn send_post(
         .send_chat_action(ChatId(chat_id), ChatAction::Typing)
         .await;
 
-    let text = render_post_text(post);
     let kb = render_post_keyboard(post);
 
     // Photo card attempt. A failed photo send (e.g. a stale cover file_id
@@ -552,8 +620,7 @@ pub async fn send_post(
     if let Some(ref cover) = post.cover_image {
         let photo_result = match build_cover_input_file(cover) {
             Some(input_file) => {
-                send_photo_card(bot, chat_id, thread_id, &input_file, &text, &post.title, kb.as_ref())
-                    .await
+                send_photo_card(bot, chat_id, thread_id, &input_file, post, kb.as_ref()).await
             }
             None => Err(anyhow::anyhow!("invalid cover reference")),
         };
@@ -568,6 +635,7 @@ pub async fn send_post(
         }
     }
 
+    let text = render_post_text(post);
     send_text_card(bot, chat_id, thread_id, &text, kb).await
 }
 
@@ -584,14 +652,12 @@ pub async fn send_post_full(
         .send_chat_action(ChatId(chat_id), ChatAction::Typing)
         .await;
 
-    let text = render_post_text(post);
     let kb = render_post_keyboard(post);
 
     if let Some(ref cover) = post.cover_image {
         let photo_result = match build_cover_input_file(cover) {
             Some(input_file) => {
-                send_photo_card_full(bot, chat_id, thread_id, &input_file, &text, &post.title, kb.as_ref())
-                    .await
+                send_photo_card_full(bot, chat_id, thread_id, &input_file, post, kb.as_ref()).await
             }
             None => Err(anyhow::anyhow!("invalid cover reference")),
         };
@@ -606,6 +672,7 @@ pub async fn send_post_full(
         }
     }
 
+    let text = render_post_text(post);
     let msg = send_text_card(bot, chat_id, thread_id, &text, kb).await?;
     Ok(vec![msg.id.0])
 }
@@ -619,27 +686,31 @@ fn build_cover_input_file(cover: &str) -> Option<InputFile> {
     }
 }
 
-/// Sends a photo card: photo+caption when the caption fits 1024 chars,
-/// otherwise photo with a short header followed by a full text message.
+/// Telegram caption limit for photos.
+const CAPTION_LIMIT: usize = 1024;
+
+/// Sends a photo card: the cover/collage goes out as a single message with
+/// the full card text in the caption (the body is truncated to fit the
+/// 1024-char caption limit). Only when even the metadata alone doesn't fit,
+/// falls back to a short-caption photo followed by a separate text message.
 async fn send_photo_card(
     bot: &Bot,
     chat_id: i64,
     thread_id: Option<i64>,
     input_file: &InputFile,
-    text: &str,
-    title: &str,
+    post: &PostData,
     kb: Option<&InlineKeyboardMarkup>,
 ) -> anyhow::Result<Message> {
-    if text.chars().count() <= 1024 {
+    if let Some(caption) = render_post_text_limited(post, CAPTION_LIMIT) {
         let bot_clone = bot.clone();
         let input_file_clone = input_file.clone();
-        let text_clone = text.to_string();
+        let caption_clone = caption.clone();
         let kb_clone = kb.cloned();
 
         let msg = execute_telegram_with_retry(|| {
             let mut req = bot_clone
                 .send_photo(ChatId(chat_id), input_file_clone.clone())
-                .caption(text_clone.clone())
+                .caption(caption_clone.clone())
                 .parse_mode(ParseMode::Html);
 
             if let Some(tid) = thread_id {
@@ -655,9 +726,9 @@ async fn send_photo_card(
         return Ok(msg);
     }
 
-    // Caption > 1024: send the photo with a short header, then a separate
-    // text message with the full card and the keyboard.
-    let short_caption = format!("🆕 <b>{}</b>", encode_text(title));
+    // Metadata alone exceeds the caption limit (very rare): send the photo
+    // with a short header, then a separate text message with the full card.
+    let short_caption = format!("🆕 <b>{}</b>", encode_text(&post.title));
     let bot_clone = bot.clone();
     let input_file_clone = input_file.clone();
 
@@ -674,28 +745,30 @@ async fn send_photo_card(
     })
     .await?;
 
-    send_text_card(bot, chat_id, thread_id, text, kb.cloned()).await
+    let text = render_post_text(post);
+    send_text_card(bot, chat_id, thread_id, &text, kb.cloned()).await
 }
 
+/// Same as [`send_photo_card`] but returns every generated message id, so
+/// the card can be fully cleaned up on the next update.
 async fn send_photo_card_full(
     bot: &Bot,
     chat_id: i64,
     thread_id: Option<i64>,
     input_file: &InputFile,
-    text: &str,
-    title: &str,
+    post: &PostData,
     kb: Option<&InlineKeyboardMarkup>,
 ) -> anyhow::Result<Vec<i32>> {
-    if text.chars().count() <= 1024 {
+    if let Some(caption) = render_post_text_limited(post, CAPTION_LIMIT) {
         let bot_clone = bot.clone();
         let input_file_clone = input_file.clone();
-        let text_clone = text.to_string();
+        let caption_clone = caption.clone();
         let kb_clone = kb.cloned();
 
         let msg = execute_telegram_with_retry(|| {
             let mut req = bot_clone
                 .send_photo(ChatId(chat_id), input_file_clone.clone())
-                .caption(text_clone.clone())
+                .caption(caption_clone.clone())
                 .parse_mode(ParseMode::Html);
 
             if let Some(tid) = thread_id {
@@ -711,7 +784,7 @@ async fn send_photo_card_full(
         return Ok(vec![msg.id.0]);
     }
 
-    let short_caption = format!("🆕 <b>{}</b>", encode_text(title));
+    let short_caption = format!("🆕 <b>{}</b>", encode_text(&post.title));
     let bot_clone = bot.clone();
     let input_file_clone = input_file.clone();
 
@@ -728,7 +801,8 @@ async fn send_photo_card_full(
     })
     .await?;
 
-    let text_msg = send_text_card(bot, chat_id, thread_id, text, kb.cloned()).await?;
+    let text = render_post_text(post);
+    let text_msg = send_text_card(bot, chat_id, thread_id, &text, kb.cloned()).await?;
     Ok(vec![photo_msg.id.0, text_msg.id.0])
 }
 
@@ -764,8 +838,9 @@ async fn send_text_card(
 
 /// Sends APK files of a published version as documents right after the card.
 /// Files are resent by their stored Telegram `file_id`, so the bot keeps
-/// nothing on its own server. Returns a list of per-file error descriptions
-/// (empty when everything was delivered).
+/// nothing on its own server. Returns the ids of successfully sent messages
+/// (for later cleanup of old update posts) along with a list of per-file
+/// error descriptions (empty when everything was delivered).
 pub async fn send_apk_documents(
     bot: &Bot,
     chat_id: i64,
@@ -773,7 +848,8 @@ pub async fn send_apk_documents(
     files: &[crate::db::custom_apps::CustomAppApkFileRecord],
     app_name: &str,
     version: &str,
-) -> Vec<String> {
+) -> (Vec<i32>, Vec<String>) {
+    let mut sent_ids = Vec::new();
     let mut errors = Vec::new();
 
     for file in files {
@@ -800,17 +876,20 @@ pub async fn send_apk_documents(
         })
         .await;
 
-        if let Err(e) = result {
-            let label = file
-                .file_name
-                .clone()
-                .unwrap_or_else(|| file.variant_label.clone());
-            tracing::error!("Failed to deliver APK file {}: {:?}", label, e);
-            errors.push(format!("{} ({})", label, e));
+        match result {
+            Ok(msg) => sent_ids.push(msg.id.0),
+            Err(e) => {
+                let label = file
+                    .file_name
+                    .clone()
+                    .unwrap_or_else(|| file.variant_label.clone());
+                tracing::error!("Failed to deliver APK file {}: {:?}", label, e);
+                errors.push(format!("{} ({})", label, e));
+            }
         }
     }
 
-    errors
+    (sent_ids, errors)
 }
 
 #[cfg(test)]
@@ -821,6 +900,7 @@ mod tests {
     fn test_render_post_text() {
         let post = PostData {
             title: "Tokio v1.40.0".to_string(),
+            repo_url: None,
             description: Some("Async runtime for Rust".to_string()),
             body: Some("Added **async** driver".to_string()),
             diff_url: Some(
@@ -852,6 +932,7 @@ mod tests {
         let long_desc = "x".repeat(600);
         let post = PostData {
             title: "App".to_string(),
+            repo_url: None,
             description: Some(long_desc),
             body: None,
             diff_url: None,
@@ -910,7 +991,10 @@ mod tests {
 
         assert_eq!(post.title, "V2RayNG v1.8.5");
         assert_eq!(post.description.as_deref(), Some("VPN client for Android"));
-        assert_eq!(post.guide_url.as_deref(), Some("https://telegra.ph/V2RayNG-Guide"));
+        assert_eq!(
+            post.guide_url.as_deref(),
+            Some("https://telegra.ph/V2RayNG-Guide")
+        );
         assert_eq!(post.tags, vec!["vpn", "android"]);
         assert_eq!(post.cover_image, Some("file_img_123".to_string()));
         assert_eq!(post.suggested_by.as_deref(), Some("kostubet"));
@@ -924,9 +1008,14 @@ mod tests {
 
     #[test]
     fn test_clean_strips_markdown_images() {
-        let md = "Before ![logo](https://example.com/logo.png) after\n![only image](http://x/y.png)";
+        let md =
+            "Before ![logo](https://example.com/logo.png) after\n![only image](http://x/y.png)";
         let cleaned = clean_markdown_source(md);
-        assert!(!cleaned.contains("!["), "images must be removed: {}", cleaned);
+        assert!(
+            !cleaned.contains("!["),
+            "images must be removed: {}",
+            cleaned
+        );
         assert!(!cleaned.contains("logo.png"));
         assert!(cleaned.contains("Before"));
         assert!(cleaned.contains("after"));
@@ -934,9 +1023,14 @@ mod tests {
 
     #[test]
     fn test_clean_strips_html_tags_keeps_text() {
-        let md = "<details>\n<summary>New features</summary>\nFixed <b>crash</b> on start\n</details>";
+        let md =
+            "<details>\n<summary>New features</summary>\nFixed <b>crash</b> on start\n</details>";
         let cleaned = clean_markdown_source(md);
-        assert!(!cleaned.contains('<'), "all tags must be stripped: {}", cleaned);
+        assert!(
+            !cleaned.contains('<'),
+            "all tags must be stripped: {}",
+            cleaned
+        );
         assert!(cleaned.contains("New features"));
         assert!(cleaned.contains("Fixed crash on start"));
     }
@@ -956,7 +1050,9 @@ mod tests {
         let md = "Text with <tag>\n```xml\n<manifest version=\"2\" />\n```\nEnd";
         let cleaned = clean_markdown_source(md);
         // Outside the fence tags are stripped; inside they survive verbatim.
-        assert!(cleaned.contains("<manifest version=\\\"2\\\" />") || cleaned.contains("<manifest"));
+        assert!(
+            cleaned.contains("<manifest version=\\\"2\\\" />") || cleaned.contains("<manifest")
+        );
         assert!(cleaned.lines().any(|l| l.starts_with("Text with")));
     }
 
@@ -964,13 +1060,21 @@ mod tests {
     fn test_clean_br_becomes_newline_and_comparisons_kept() {
         let cleaned = clean_markdown_source("line1<br>line2 and a < b");
         assert!(cleaned.contains("line1\nline2"));
-        assert!(cleaned.contains("a < b"), "comparisons must stay: {}", cleaned);
+        assert!(
+            cleaned.contains("a < b"),
+            "comparisons must stay: {}",
+            cleaned
+        );
     }
 
     #[test]
     fn test_snake_case_not_italic() {
         let html = markdown_to_telegram_html("Use my_var_name carefully");
-        assert!(!html.contains("<i>"), "snake_case must not become italic: {}", html);
+        assert!(
+            !html.contains("<i>"),
+            "snake_case must not become italic: {}",
+            html
+        );
         assert!(html.contains("my_var_name"));
 
         let italics = markdown_to_telegram_html("_real italic_ and *star*");
@@ -987,6 +1091,7 @@ mod tests {
 
         let post = PostData {
             title: "Big Release".to_string(),
+            repo_url: None,
             description: None,
             body: Some(long_md),
             diff_url: None,
@@ -1023,6 +1128,7 @@ mod tests {
     fn test_render_post_text_strips_images_from_body() {
         let post = PostData {
             title: "X".to_string(),
+            repo_url: None,
             description: None,
             body: Some("See ![screenshot](https://ex.com/1.png) changes".to_string()),
             diff_url: None,
@@ -1033,7 +1139,11 @@ mod tests {
             suggested_by: None,
         };
         let rendered = render_post_text(&post);
-        assert!(!rendered.contains("screenshot"), "image alt must be gone: {}", rendered);
+        assert!(
+            !rendered.contains("screenshot"),
+            "image alt must be gone: {}",
+            rendered
+        );
         assert!(rendered.contains("See"));
         assert!(rendered.contains("changes"));
     }
@@ -1043,5 +1153,75 @@ mod tests {
         assert!(build_cover_input_file("https://example.com/pic.jpg").is_some());
         assert!(build_cover_input_file("AgACAgIAAxkDAgMG").is_some()); // bot file_id
         assert!(build_cover_input_file("http://[invalid").is_none()); // malformed URL
+    }
+
+    #[test]
+    fn test_repo_link_in_title() {
+        let post = PostData {
+            title: "tokio-rs/tokio • v1.42.0".to_string(),
+            repo_url: Some("https://github.com/tokio-rs/tokio".to_string()),
+            description: None,
+            body: None,
+            diff_url: None,
+            guide_url: None,
+            tags: vec![],
+            cover_image: None,
+            download_buttons: vec![],
+            suggested_by: None,
+        };
+        let rendered = render_post_text(&post);
+        assert!(rendered.contains(
+            "<a href=\"https://github.com/tokio-rs/tokio\">tokio-rs/tokio</a> • v1.42.0"
+        ));
+
+        // Without repo_url the title stays plain escaped text.
+        let mut plain = post.clone();
+        plain.repo_url = None;
+        assert!(render_post_text(&plain).contains("🆕 <b>tokio-rs/tokio • v1.42.0</b>"));
+    }
+
+    #[test]
+    fn test_render_post_text_limited_fits_caption() {
+        let mut long_md = String::new();
+        for i in 0..200 {
+            long_md.push_str(&format!(
+                "- Item **{}** with `code` and [link](https://example.com/{}), plus some filling text here\n",
+                i, i
+            ));
+        }
+        let post = PostData {
+            title: "owner/repo • v1.0".to_string(),
+            repo_url: None,
+            description: Some("Short description".to_string()),
+            body: Some(long_md),
+            diff_url: Some("https://github.com/owner/repo/compare/v0.9...v1.0".to_string()),
+            guide_url: None,
+            tags: vec!["tag1".to_string()],
+            cover_image: Some("file_cover".to_string()),
+            download_buttons: vec![],
+            suggested_by: Some("user".to_string()),
+        };
+
+        let limited = render_post_text_limited(&post, 1024).expect("must fit");
+        assert!(limited.chars().count() <= 1024);
+        assert!(limited.contains("🆕 <b>owner/repo • v1.0</b>"));
+        assert!(limited.contains("... [описание обрезано]"));
+        // Truncation must keep the HTML balanced.
+        assert_eq!(
+            limited.matches("<b>").count(),
+            limited.matches("</b>").count()
+        );
+        assert_eq!(
+            limited.matches("<blockquote").count(),
+            limited.matches("</blockquote>").count()
+        );
+
+        // A short post is returned verbatim.
+        let mut small = post.clone();
+        small.body = Some("- tiny changelog".to_string());
+        assert_eq!(
+            render_post_text_limited(&small, 1024).as_deref(),
+            Some(render_post_text(&small).as_str())
+        );
     }
 }

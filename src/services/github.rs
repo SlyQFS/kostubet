@@ -77,7 +77,9 @@ pub enum CheckResult {
     /// The repository no longer exists (404 from every checked endpoint).
     RepoNotFound,
     /// GitHub API quota exhausted; `retry_after_secs` until the reset.
-    RateLimited { retry_after_secs: u64 },
+    RateLimited {
+        retry_after_secs: u64,
+    },
 }
 
 pub struct GithubClient {
@@ -211,10 +213,7 @@ impl GithubClient {
         owner: &str,
         name: &str,
     ) -> Result<Option<(String, Option<String>)>> {
-        let url = format!(
-            "{}/repos/{}/{}/releases?per_page=1",
-            API_BASE, owner, name
-        );
+        let url = format!("{}/repos/{}/{}/releases?per_page=1", API_BASE, owner, name);
         let resp = self
             .client
             .get(&url)
@@ -232,7 +231,8 @@ impl GithubClient {
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
-        let releases: Vec<GhRelease> = resp.json().await.context("Failed to parse releases JSON")?;
+        let releases: Vec<GhRelease> =
+            resp.json().await.context("Failed to parse releases JSON")?;
         Ok(releases
             .into_iter()
             .next()
@@ -294,10 +294,8 @@ impl GithubClient {
                 endpoints_404 += 1;
                 warn!("No releases found for {}/{} (404)", owner, name);
             } else if resp.status().is_success() {
-                let mut releases: Vec<GhRelease> = resp
-                    .json()
-                    .await
-                    .context("Failed to parse releases JSON")?;
+                let mut releases: Vec<GhRelease> =
+                    resp.json().await.context("Failed to parse releases JSON")?;
 
                 // Optional pre-release filter (repos flooding with betas).
                 if !include_prereleases {
@@ -335,17 +333,17 @@ impl GithubClient {
                         .iter()
                         .filter(|a| {
                             let name = a.name.to_lowercase();
-                            name.ends_with(".apk") || name.ends_with(".zip") || name.ends_with(".7z")
+                            name.ends_with(".apk")
+                                || name.ends_with(".zip")
+                                || name.ends_with(".7z")
                         })
                         .cloned()
                         .collect();
 
-                    let has_archives = all_apk_assets
-                        .iter()
-                        .any(|a| {
-                            let name = a.name.to_lowercase();
-                            name.ends_with(".zip") || name.ends_with(".7z")
-                        });
+                    let has_archives = all_apk_assets.iter().any(|a| {
+                        let name = a.name.to_lowercase();
+                        name.ends_with(".zip") || name.ends_with(".7z")
+                    });
 
                     let apk_assets: Vec<ApkAsset> = if has_archives {
                         vec![ApkAsset {
@@ -360,10 +358,10 @@ impl GithubClient {
 
                         if apk_files.is_empty() {
                             Vec::new()
-                        } else if let Some(universal) = apk_files
-                            .iter()
-                            .find(|a| detect_variant(&a.name) == Some("universal") || a.name.to_lowercase().contains("universal"))
-                        {
+                        } else if let Some(universal) = apk_files.iter().find(|a| {
+                            detect_variant(&a.name) == Some("universal")
+                                || a.name.to_lowercase().contains("universal")
+                        }) {
                             vec![ApkAsset {
                                 variant: "universal".to_string(),
                                 url: universal.browser_download_url.clone(),
@@ -376,7 +374,9 @@ impl GithubClient {
                                 variant: "arm64-v8a".to_string(),
                                 url: v8.browser_download_url.clone(),
                             }]
-                        } else if apk_files.len() == 1 && detect_variant(&apk_files[0].name) != Some("armeabi-v7a") {
+                        } else if apk_files.len() == 1
+                            && detect_variant(&apk_files[0].name) != Some("armeabi-v7a")
+                        {
                             let single = apk_files[0];
                             vec![ApkAsset {
                                 variant: detect_variant(&single.name).unwrap_or("apk").to_string(),

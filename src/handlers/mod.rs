@@ -65,7 +65,9 @@ pub enum Command {
     Submitapk,
     #[command(description = "Список опубликованных кастомных приложений.")]
     Apps,
-    #[command(description = "Установить или обновить руководство. Использование: /setguide <owner/repo|slug> <url|текст>")]
+    #[command(
+        description = "Установить или обновить руководство. Использование: /setguide <owner/repo|slug> <url|текст>"
+    )]
     Setguide(String),
 }
 
@@ -103,7 +105,8 @@ pub async fn handle_command(
         Command::Admin => commands_public::handle_admin_panel(&bot, &msg, &db).await,
         Command::Cancel => {
             let _ = dialogue.exit().await;
-            bot.send_message(msg.chat.id, crate::strings::CANCEL_MESSAGE).await?;
+            bot.send_message(msg.chat.id, crate::strings::CANCEL_MESSAGE)
+                .await?;
             Ok(())
         }
         Command::Debug => {

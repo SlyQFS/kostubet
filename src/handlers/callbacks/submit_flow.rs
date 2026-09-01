@@ -227,7 +227,11 @@ pub async fn handle_submit_confirm_send(
         if data.guide_url.is_some() && app.guide_url.is_none() {
             let _ = db
                 .custom_apps()
-                .set_app_guide(app.id, data.guide_url.as_deref(), data.guide_text.as_deref())
+                .set_app_guide(
+                    app.id,
+                    data.guide_url.as_deref(),
+                    data.guide_text.as_deref(),
+                )
                 .await;
         }
 
@@ -296,16 +300,36 @@ pub async fn handle_submit_confirm_send(
         // Optional card fields: a skipped field is omitted entirely instead of
         // leaving a placeholder line without a value.
         let mut fields = String::new();
-        if let Some(t) = data.title.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        if let Some(t) = data
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
             fields.push_str(&format!("\n📌 Заголовок: <code>{}</code>", encode_text(t)));
         }
-        if let Some(c) = data.changelog.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+        if let Some(c) = data
+            .changelog
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+        {
             fields.push_str(&format!("\n📝 Changelog: <code>{}</code>", encode_text(c)));
         }
-        if let Some(d) = data.diff_url.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+        if let Some(d) = data
+            .diff_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|d| !d.is_empty())
+        {
             fields.push_str(&format!("\n🔗 Diff: <code>{}</code>", encode_text(d)));
         }
-        if let Some(g) = data.guide_url.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+        if let Some(g) = data
+            .guide_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|g| !g.is_empty())
+        {
             fields.push_str(&format!("\n📖 Гайд: <code>{}</code>", encode_text(g)));
         }
 
@@ -410,7 +434,10 @@ pub async fn handle_submit_resume(
             let kb = InlineKeyboardMarkup::new(vec![
                 vec![
                     InlineKeyboardButton::callback("🆕 Новое приложение", "submit_mode:new"),
-                    InlineKeyboardButton::callback("🔄 Обновление существующего", "submit_mode:update"),
+                    InlineKeyboardButton::callback(
+                        "🔄 Обновление существующего",
+                        "submit_mode:update",
+                    ),
                 ],
                 vec![InlineKeyboardButton::callback(
                     "❌ Отмена",
@@ -459,13 +486,10 @@ pub async fn handle_submit_skip(
                 }))
                 .await?;
             if let Some(cid) = chat_id {
-                bot.send_message(
-                    cid,
-                    "📦 Введите версию (например: <code>1.0.0</code>):",
-                )
-                .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
-                .parse_mode(ParseMode::Html)
-                .await?;
+                bot.send_message(cid, "📦 Введите версию (например: <code>1.0.0</code>):")
+                    .reply_markup(crate::dialogue::submit_apk::cancel_keyboard())
+                    .parse_mode(ParseMode::Html)
+                    .await?;
             }
         }
         SubmitApkState::WaitingTitle { data } => {
@@ -538,7 +562,8 @@ pub async fn handle_submit_skip(
         }
         SubmitApkState::WaitingCover { data } => {
             if let Some(cid) = chat_id {
-                crate::dialogue::submit_apk::process_cover_and_advance(bot, cid, dialogue, data).await?;
+                crate::dialogue::submit_apk::process_cover_and_advance(bot, cid, dialogue, data)
+                    .await?;
             }
         }
         SubmitApkState::WaitingTags { data } => {
@@ -568,7 +593,9 @@ pub async fn handle_apk_files_done(
     };
 
     let chat_id = q.message.as_ref().map(|m| m.chat().id);
-    let Some(cid) = chat_id else { return Ok(()); };
+    let Some(cid) = chat_id else {
+        return Ok(());
+    };
 
     if data.apk_files.is_empty() {
         bot.send_message(
@@ -587,13 +614,10 @@ pub async fn handle_apk_files_done(
         }))
         .await?;
 
-    bot.send_message(
-        cid,
-        "🏷️ Введите теги (например: <code>#example</code>):",
-    )
-    .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
-    .parse_mode(ParseMode::Html)
-    .await?;
+    bot.send_message(cid, "🏷️ Введите теги (например: <code>#example</code>):")
+        .reply_markup(crate::dialogue::submit_apk::skip_or_cancel_keyboard())
+        .parse_mode(ParseMode::Html)
+        .await?;
 
     Ok(())
 }

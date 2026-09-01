@@ -82,5 +82,3 @@ pub async fn handle_start_action(
 
     Ok(())
 }
-
-

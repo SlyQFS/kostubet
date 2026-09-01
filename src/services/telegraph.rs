@@ -83,7 +83,9 @@ pub async fn get_or_create_access_token() -> Result<String> {
         .context("Invalid response from Telegraph createAccount")?;
 
     if !json.ok {
-        let err = json.error.unwrap_or_else(|| "Unknown Telegraph error".to_string());
+        let err = json
+            .error
+            .unwrap_or_else(|| "Unknown Telegraph error".to_string());
         return Err(anyhow::anyhow!("Telegraph createAccount error: {}", err));
     }
 
@@ -97,11 +99,7 @@ pub async fn get_or_create_access_token() -> Result<String> {
 }
 
 /// Publishes a text guide to Telegraph and returns the article URL with Instant View support.
-pub async fn publish_text_guide(
-    title: &str,
-    author: Option<&str>,
-    text: &str,
-) -> Result<String> {
+pub async fn publish_text_guide(title: &str, author: Option<&str>, text: &str) -> Result<String> {
     let token = get_or_create_access_token().await?;
 
     let mut nodes = Vec::new();
@@ -152,7 +150,10 @@ pub async fn publish_text_guide(
             nodes.push(TelegraphNode::Element {
                 tag: "p".to_string(),
                 attrs: None,
-                children: Some(vec![TelegraphNode::Text(format!("👤 Руководство подготовил: @{}", clean))]),
+                children: Some(vec![TelegraphNode::Text(format!(
+                    "👤 Руководство подготовил: @{}",
+                    clean
+                ))]),
             });
         }
     }
@@ -179,11 +180,7 @@ fn get_author_info() -> (String, String) {
 
 /// Internal helper to call `createPage` on Telegraph API.
 /// Author and URL are resolved from TELEGRAPH_AUTHOR_NAME and TELEGRAPH_AUTHOR_URL env variables.
-async fn create_page(
-    token: &str,
-    title: &str,
-    content: &[TelegraphNode],
-) -> Result<String> {
+async fn create_page(token: &str, title: &str, content: &[TelegraphNode]) -> Result<String> {
     let safe_title = if title.trim().is_empty() {
         "Руководство и настройка"
     } else {
@@ -240,7 +237,9 @@ mod tests {
             TelegraphNode::Element {
                 tag: "p".to_string(),
                 attrs: None,
-                children: Some(vec![TelegraphNode::Text("Установите приложение.".to_string())]),
+                children: Some(vec![TelegraphNode::Text(
+                    "Установите приложение.".to_string(),
+                )]),
             },
         ];
 

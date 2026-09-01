@@ -52,20 +52,32 @@ pub async fn notify_admins(
 ) -> Result<()> {
     let admins = db.admins().list_admins().await.unwrap_or_default();
     for admin in admins {
+        let admin_chat_id = ChatId(admin.telegram_id);
+
         if let Some(file_id) = photo_file_id {
-            let photo = bot
-                .send_photo(ChatId(admin.telegram_id), InputFile::file_id(file_id.to_string()))
-                .caption("🖼 Предпросмотр обложки из заявки");
-            if let Err(e) = photo.await {
-                warn!(
-                    "Failed to send cover preview to admin {}: {:?}",
-                    admin.telegram_id, e
-                );
+            if text.chars().count() <= 1024 {
+                let mut photo_req = bot
+                    .send_photo(admin_chat_id, InputFile::file_id(file_id.to_string()))
+                    .caption(text.clone())
+                    .parse_mode(ParseMode::Html);
+
+                if let Some(ref kb) = keyboard {
+                    photo_req = photo_req.reply_markup(kb.clone());
+                }
+
+                if photo_req.await.is_ok() {
+                    continue;
+                }
+            } else {
+                let _ = bot
+                    .send_photo(admin_chat_id, InputFile::file_id(file_id.to_string()))
+                    .caption("🖼 Предпросмотр обложки")
+                    .await;
             }
         }
 
         let mut req = bot
-            .send_message(ChatId(admin.telegram_id), text.clone())
+            .send_message(admin_chat_id, text.clone())
             .parse_mode(ParseMode::Html);
 
         if let Some(ref kb) = keyboard {

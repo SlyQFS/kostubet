@@ -113,6 +113,10 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                             "{}/{} • {}",
                                             tool.owner, tool.repo, update.title
                                         ),
+                                        repo_url: Some(format!(
+                                            "https://github.com/{}/{}",
+                                            tool.owner, tool.repo
+                                        )),
                                         description: tool.description.clone(),
                                         body: update.body,
                                         diff_url: Some(update.url),
@@ -196,11 +200,8 @@ pub async fn run_poller(bot: Bot, db: Database, config: Config) -> Result<()> {
                                 Ok(CheckResult::RepoNotFound) => {
                                     // Repository deleted or renamed: count
                                     // consecutive misses and alert admins once.
-                                    let fails = db
-                                        .tools()
-                                        .bump_tool_failures(tool.id)
-                                        .await
-                                        .unwrap_or(0);
+                                    let fails =
+                                        db.tools().bump_tool_failures(tool.id).await.unwrap_or(0);
                                     warn!(
                                         "Репозиторий {}/{} не найден (404), серия: {}.",
                                         tool.owner, tool.repo, fails

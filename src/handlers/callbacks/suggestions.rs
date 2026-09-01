@@ -54,7 +54,11 @@ pub async fn handle_suggestion_approve(
                 return Ok(());
             }
             Err(e) => {
-                warn!("Не удалось проверить существование {}: {:?}", sugg.full_name(), e);
+                warn!(
+                    "Не удалось проверить существование {}: {:?}",
+                    sugg.full_name(),
+                    e
+                );
             }
         }
     }

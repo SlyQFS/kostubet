@@ -184,6 +184,7 @@ impl Database {
                 reviewed_by           INTEGER,
                 reviewed_at           TEXT,
                 published_message_id  INTEGER,
+                published_message_ids TEXT,
                 created_at            TEXT NOT NULL
             );
 
@@ -232,9 +233,11 @@ impl Database {
         .unwrap_or(None);
 
         if has_fail_count == Some(0) {
-            let _ = sqlx::query("ALTER TABLE tracked_tools ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0;")
-                .execute(&self.pool)
-                .await;
+            let _ = sqlx::query(
+                "ALTER TABLE tracked_tools ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0;",
+            )
+            .execute(&self.pool)
+            .await;
         }
 
         // Idempotent check: optional description, proposer, and guide columns
@@ -253,6 +256,7 @@ impl Database {
             ("custom_app_versions", "submitted_by_username"),
             ("custom_app_versions", "guide_url"),
             ("custom_app_versions", "guide_text"),
+            ("custom_app_versions", "published_message_ids"),
         ] {
             let has_column: Option<i64> = sqlx::query_scalar(&format!(
                 "SELECT COUNT(1) FROM pragma_table_info('{}') WHERE name = '{}';",
@@ -263,9 +267,12 @@ impl Database {
             .unwrap_or(None);
 
             if has_column == Some(0) {
-                let _ = sqlx::query(&format!("ALTER TABLE {} ADD COLUMN {} TEXT;", table, column))
-                    .execute(&self.pool)
-                    .await;
+                let _ = sqlx::query(&format!(
+                    "ALTER TABLE {} ADD COLUMN {} TEXT;",
+                    table, column
+                ))
+                .execute(&self.pool)
+                .await;
             }
         }
 
@@ -354,7 +361,13 @@ mod tests {
         // 2. Tools, Tags & ETag
         let tool_id = db
             .tools()
-            .add_tool("tokio-rs", "tokio", 100, Some("Async runtime"), Some("slyqfs"))
+            .add_tool(
+                "tokio-rs",
+                "tokio",
+                100,
+                Some("Async runtime"),
+                Some("slyqfs"),
+            )
             .await?;
         let tag_id = db.tags().get_or_create_tag("async").await?;
         db.tags()
@@ -378,12 +391,21 @@ mod tests {
             .set_tool_description(tool_id, Some("Updated description"))
             .await?;
         assert_eq!(
-            db.tools().get_tool_by_id(tool_id).await?.unwrap().description.as_deref(),
+            db.tools()
+                .get_tool_by_id(tool_id)
+                .await?
+                .unwrap()
+                .description
+                .as_deref(),
             Some("Updated description")
         );
         db.tools().set_tool_description(tool_id, None).await?;
         assert_eq!(
-            db.tools().get_tool_by_id(tool_id).await?.unwrap().description,
+            db.tools()
+                .get_tool_by_id(tool_id)
+                .await?
+                .unwrap()
+                .description,
             None
         );
 
@@ -403,7 +425,12 @@ mod tests {
             .await?;
         assert_eq!(db.suggestions().count_pending_for_user(400).await?, 1);
         assert_eq!(
-            db.suggestions().get_suggestion(sugg_id).await?.unwrap().proposed_description.as_deref(),
+            db.suggestions()
+                .get_suggestion(sugg_id)
+                .await?
+                .unwrap()
+                .proposed_description
+                .as_deref(),
             Some("The Rust compiler")
         );
 
@@ -424,7 +451,12 @@ mod tests {
             .set_app_description(app.id, Some("Edited description"))
             .await?;
         assert_eq!(
-            db.custom_apps().get_app_by_id(app.id).await?.unwrap().description.as_deref(),
+            db.custom_apps()
+                .get_app_by_id(app.id)
+                .await?
+                .unwrap()
+                .description
+                .as_deref(),
             Some("Edited description")
         );
         let ver_id = db
@@ -455,7 +487,10 @@ mod tests {
 
         let pending_vers = db.custom_apps().get_pending_versions().await?;
         assert_eq!(pending_vers.len(), 1);
-        assert_eq!(pending_vers[0].0.submitted_by_username.as_deref(), Some("author_user"));
+        assert_eq!(
+            pending_vers[0].0.submitted_by_username.as_deref(),
+            Some("author_user")
+        );
 
         let ver_approved = db
             .custom_apps()
@@ -472,7 +507,27 @@ mod tests {
         let current = db.custom_apps().get_current_version(app.id).await?.unwrap();
         assert_eq!(current.version, "1.0.0");
         assert_eq!(current.published_message_id, Some(777));
-        assert_eq!(current.submitted_by_username.as_deref(), Some("author_user"));
+        assert_eq!(
+            current.submitted_by_username.as_deref(),
+            Some("author_user")
+        );
+
+        // Multi-id tracking: card + changelog + APK documents.
+        db.custom_apps()
+            .set_published_message_ids(ver_id, &[777, 778, 779])
+            .await?;
+        assert_eq!(
+            db.custom_apps()
+                .get_published_message_ids_for_version(ver_id)
+                .await?,
+            vec![777, 778, 779]
+        );
+        assert_eq!(
+            db.custom_apps()
+                .get_published_message_ids_for_app(app.id)
+                .await?,
+            vec![777, 778, 779]
+        );
 
         Ok(())
     }
@@ -536,7 +591,12 @@ mod tests {
         assert_eq!(tool.last_message_ids, None);
 
         db.tools()
-            .update_last_release_etag_and_messages(tool.id, Some("v1.0"), Some("W/123"), Some("101,102"))
+            .update_last_release_etag_and_messages(
+                tool.id,
+                Some("v1.0"),
+                Some("W/123"),
+                Some("101,102"),
+            )
             .await?;
         let updated = db.tools().get_tool("tokio-rs", "tokio").await?.unwrap();
         assert_eq!(updated.last_message_ids.as_deref(), Some("101,102"));
@@ -546,7 +606,12 @@ mod tests {
             .add_tool("tokio-rs", "tokio", 1, Some("desc"), None)
             .await?;
         assert_eq!(
-            db.tools().get_tool_by_id(tool_id).await?.unwrap().description.as_deref(),
+            db.tools()
+                .get_tool_by_id(tool_id)
+                .await?
+                .unwrap()
+                .description
+                .as_deref(),
             Some("desc")
         );
 
@@ -555,7 +620,12 @@ mod tests {
             .create_suggestion(10, None, "a", "b", None, Some("sd"), None, None)
             .await?;
         assert_eq!(
-            db.suggestions().get_suggestion(sugg_id).await?.unwrap().proposed_description.as_deref(),
+            db.suggestions()
+                .get_suggestion(sugg_id)
+                .await?
+                .unwrap()
+                .proposed_description
+                .as_deref(),
             Some("sd")
         );
 

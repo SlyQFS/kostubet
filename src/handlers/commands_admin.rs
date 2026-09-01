@@ -234,7 +234,10 @@ pub async fn handle_track(bot: &Bot, msg: &Message, args: &str, db: &Database) -
             Err(e) => {
                 bot.send_message(
                     chat_id,
-                    format!("⚠️ Не удалось проверить репозиторий ({}). Попробуйте позже.", e),
+                    format!(
+                        "⚠️ Не удалось проверить репозиторий ({}). Попробуйте позже.",
+                        e
+                    ),
                 )
                 .await?;
                 return Ok(());
@@ -585,14 +588,16 @@ pub async fn handle_debug(
         format!("{} сек назад", now - last_cycle)
     };
 
-    let gh_remaining =
-        crate::services::github::RATE_REMAINING.load(Ordering::Relaxed);
+    let gh_remaining = crate::services::github::RATE_REMAINING.load(Ordering::Relaxed);
     let gh_reset = crate::services::github::RATE_RESET_UNIX.load(Ordering::Relaxed);
     let quota_str = if gh_remaining == u32::MAX {
         "нет данных (запросов ещё не было)".to_string()
     } else {
         let until_reset = (gh_reset - now).max(0);
-        format!("осталось {} (сброс через {} сек)", gh_remaining, until_reset)
+        format!(
+            "осталось {} (сброс через {} сек)",
+            gh_remaining, until_reset
+        )
     };
 
     let failing = db.tools().list_failing_tools().await.unwrap_or_default();
@@ -677,6 +682,7 @@ pub async fn handle_test(
 
     let sample_post = PostData {
         title: "Tokio v1.42.0".to_string(),
+        repo_url: Some("https://github.com/tokio-rs/tokio".to_string()),
         description: Some("Асинхронный runtime для Rust".to_string()),
         body: Some(
             "# Tokio v1.42.0 Highlights\n\n\
@@ -791,18 +797,31 @@ pub async fn handle_setguide(bot: &Bot, msg: &Message, args: &str, db: &Database
     // Try finding tracked GitHub repo first
     if let Some(repo) = RepoConfig::parse_ref(target) {
         if let Some(tool) = db.tools().get_tool(&repo.owner, &repo.name).await? {
-            let (guide_url, guide_text) = if content.starts_with("http://") || content.starts_with("https://") {
-                (Some(content.to_string()), None)
-            } else {
-                let url = crate::services::telegraph::publish_text_guide(&repo.full_name(), None, content).await.ok();
-                (url, Some(content.to_string()))
-            };
+            let (guide_url, guide_text) =
+                if content.starts_with("http://") || content.starts_with("https://") {
+                    (Some(content.to_string()), None)
+                } else {
+                    let url = crate::services::telegraph::publish_text_guide(
+                        &repo.full_name(),
+                        None,
+                        content,
+                    )
+                    .await
+                    .ok();
+                    (url, Some(content.to_string()))
+                };
 
-            db.tools().set_tool_guide(tool.id, guide_url.as_deref(), guide_text.as_deref()).await?;
+            db.tools()
+                .set_tool_guide(tool.id, guide_url.as_deref(), guide_text.as_deref())
+                .await?;
             let link_msg = guide_url.as_deref().unwrap_or("сохранен как текст");
             bot.send_message(
                 chat_id,
-                format!("✅ Руководство для <b>{}</b> успешно обновлено:\n<code>{}</code>", repo.full_name(), link_msg),
+                format!(
+                    "✅ Руководство для <b>{}</b> успешно обновлено:\n<code>{}</code>",
+                    repo.full_name(),
+                    link_msg
+                ),
             )
             .parse_mode(ParseMode::Html)
             .await?;
@@ -812,14 +831,19 @@ pub async fn handle_setguide(bot: &Bot, msg: &Message, args: &str, db: &Database
 
     // Try finding custom app by slug
     if let Some(app) = db.custom_apps().get_app_by_slug(target).await? {
-        let (guide_url, guide_text) = if content.starts_with("http://") || content.starts_with("https://") {
-            (Some(content.to_string()), None)
-        } else {
-            let url = crate::services::telegraph::publish_text_guide(&app.name, None, content).await.ok();
-            (url, Some(content.to_string()))
-        };
+        let (guide_url, guide_text) =
+            if content.starts_with("http://") || content.starts_with("https://") {
+                (Some(content.to_string()), None)
+            } else {
+                let url = crate::services::telegraph::publish_text_guide(&app.name, None, content)
+                    .await
+                    .ok();
+                (url, Some(content.to_string()))
+            };
 
-        db.custom_apps().set_app_guide(app.id, guide_url.as_deref(), guide_text.as_deref()).await?;
+        db.custom_apps()
+            .set_app_guide(app.id, guide_url.as_deref(), guide_text.as_deref())
+            .await?;
         let link_msg = guide_url.as_deref().unwrap_or("сохранен как текст");
         bot.send_message(
             chat_id,
@@ -832,7 +856,10 @@ pub async fn handle_setguide(bot: &Bot, msg: &Message, args: &str, db: &Database
 
     bot.send_message(
         chat_id,
-        format!("❌ Инструмент или приложение «{}» не найдено в базе данных.", target),
+        format!(
+            "❌ Инструмент или приложение «{}» не найдено в базе данных.",
+            target
+        ),
     )
     .parse_mode(ParseMode::Html)
     .await?;

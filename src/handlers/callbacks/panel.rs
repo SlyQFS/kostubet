@@ -6,18 +6,16 @@
 
 use crate::db::tags::ItemType;
 use crate::db::Database;
-use crate::dialogue::{AdminState, DialogueState};
 use crate::dialogue::BotDialogue;
+use crate::dialogue::{AdminState, DialogueState};
 use crate::services::render::{
-    build_apk_post_data, send_apk_documents, send_post, DownloadTarget, PostData,
+    build_apk_post_data, send_apk_documents, send_post, send_post_full, DownloadTarget, PostData,
 };
 use crate::strings::ACCESS_DENIED;
 use anyhow::Result;
 use html_escape::encode_text;
 use teloxide::prelude::*;
-use teloxide::types::{
-    ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode,
-};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
 
 pub const REPOS_PAGE_SIZE: usize = 8;
 pub const TAGS_PAGE_SIZE: usize = 10;
@@ -121,7 +119,11 @@ async fn root_view(db: &Database) -> Result<(String, InlineKeyboardMarkup)> {
         📦 <b>Отслеживается репозиториев:</b> <code>{}</code>\n\
         📱 <b>Опубликовано APK-приложений:</b> <code>{}</code>\n\
         ⏳ <b>В очереди модерации:</b> <code>{}</code> (репозитории: {}, APK: {})",
-        tool_count, app_count, pending_repo + pending_apk, pending_repo, pending_apk,
+        tool_count,
+        app_count,
+        pending_repo + pending_apk,
+        pending_repo,
+        pending_apk,
     );
 
     let kb = InlineKeyboardMarkup::new(vec![
@@ -136,21 +138,22 @@ async fn root_view(db: &Database) -> Result<(String, InlineKeyboardMarkup)> {
             ),
             btn("📱 Приложения", "adm:apps:0"),
         ],
-        vec![btn("👥 Админы", "adm:admins"), btn("🔁 Обновить", "adm:root")],
+        vec![
+            btn("👥 Админы", "adm:admins"),
+            btn("🔁 Обновить", "adm:root"),
+        ],
         vec![btn("📜 Журнал действий", "adm:audit:0")],
     ]);
 
     Ok((text, kb))
 }
 
-async fn repos_page_view(
-    db: &Database,
-    page: usize,
-) -> Result<(String, InlineKeyboardMarkup)> {
+async fn repos_page_view(db: &Database, page: usize) -> Result<(String, InlineKeyboardMarkup)> {
     let tools = db.tools().list_tools().await?;
     let pages = total_pages(tools.len(), REPOS_PAGE_SIZE);
     let page = page.min(pages - 1);
-    let chunk = &tools[page * REPOS_PAGE_SIZE..(page * REPOS_PAGE_SIZE + REPOS_PAGE_SIZE).min(tools.len())];
+    let chunk =
+        &tools[page * REPOS_PAGE_SIZE..(page * REPOS_PAGE_SIZE + REPOS_PAGE_SIZE).min(tools.len())];
 
     let mut text = format!(
         "📺 <b>Отслеживаемые репозитории</b> ({}, стр. {}/{})",
@@ -269,12 +272,10 @@ async fn repo_untrack_confirm_view(
         encode_text(&tool.full_name())
     );
 
-    let kb = InlineKeyboardMarkup::new(vec![
-        vec![
-            btn("✅ Да, убрать", format!("adm:repountrackok:{}", tool.id)),
-            btn("❌ Отменить", format!("adm:repo:{}", tool.id)),
-        ],
-    ]);
+    let kb = InlineKeyboardMarkup::new(vec![vec![
+        btn("✅ Да, убрать", format!("adm:repountrackok:{}", tool.id)),
+        btn("❌ Отменить", format!("adm:repo:{}", tool.id)),
+    ]]);
 
     Ok((text, kb))
 }
@@ -311,10 +312,7 @@ async fn repo_tags_view(db: &Database, tool_id: i64) -> Result<(String, InlineKe
         "➕ Добавить тег",
         format!("adm:repotagadd:{}", tool.id),
     )]);
-    rows.push(vec![btn(
-        "⬅️ Назад",
-        format!("adm:repo:{}", tool.id),
-    )]);
+    rows.push(vec![btn("⬅️ Назад", format!("adm:repo:{}", tool.id))]);
 
     Ok((text, InlineKeyboardMarkup::new(rows)))
 }
@@ -323,7 +321,8 @@ async fn tags_page_view(db: &Database, page: usize) -> Result<(String, InlineKey
     let tags = db.tags().list_tags_with_usage().await?;
     let pages = total_pages(tags.len(), TAGS_PAGE_SIZE);
     let page = page.min(pages - 1);
-    let chunk = &tags[page * TAGS_PAGE_SIZE..(page * TAGS_PAGE_SIZE + TAGS_PAGE_SIZE).min(tags.len())];
+    let chunk =
+        &tags[page * TAGS_PAGE_SIZE..(page * TAGS_PAGE_SIZE + TAGS_PAGE_SIZE).min(tags.len())];
 
     let mut text = format!(
         "🏷 <b>Теги</b> ({}, стр. {}/{})",
@@ -337,7 +336,11 @@ async fn tags_page_view(db: &Database, page: usize) -> Result<(String, InlineKey
 
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
     for (t, usage) in chunk {
-        text.push_str(&format!("\n• #{} — используется: {}", encode_text(&t.name), usage));
+        text.push_str(&format!(
+            "\n• #{} — используется: {}",
+            encode_text(&t.name),
+            usage
+        ));
         rows.push(vec![btn(
             format!("🏷 #{} ({})", t.name, usage),
             format!("adm:tag:{}", t.id),
@@ -363,7 +366,11 @@ async fn tag_detail_view(db: &Database, tag_id: i64) -> Result<(String, InlineKe
     };
 
     let items = db.tags().list_items_for_tag(tag_id).await?;
-    let mut text = format!("🏷 <b>#{}</b>\n\nИспользуется в (<code>{}</code>):", encode_text(&tag.name), items.len());
+    let mut text = format!(
+        "🏷 <b>#{}</b>\n\nИспользуется в (<code>{}</code>):",
+        encode_text(&tag.name),
+        items.len()
+    );
     if items.is_empty() {
         text.push_str("\n📭 Нигде не используется.");
     }
@@ -397,7 +404,10 @@ async fn tag_detail_view(db: &Database, tag_id: i64) -> Result<(String, InlineKe
     Ok((text, kb))
 }
 
-async fn tag_delete_confirm_view(db: &Database, tag_id: i64) -> Result<(String, InlineKeyboardMarkup)> {
+async fn tag_delete_confirm_view(
+    db: &Database,
+    tag_id: i64,
+) -> Result<(String, InlineKeyboardMarkup)> {
     let tags = db.tags().list_tags().await?;
     let Some(tag) = tags.iter().find(|t| t.id == tag_id) else {
         return Ok((
@@ -420,10 +430,7 @@ async fn tag_delete_confirm_view(db: &Database, tag_id: i64) -> Result<(String, 
 }
 
 /// Compact one-message moderation queue with per-item action buttons.
-async fn pending_page_view(
-    db: &Database,
-    page: usize,
-) -> Result<(String, InlineKeyboardMarkup)> {
+async fn pending_page_view(db: &Database, page: usize) -> Result<(String, InlineKeyboardMarkup)> {
     let suggestions = db.suggestions().get_pending_suggestions().await?;
     let pending_apps = db.custom_apps().get_pending_versions().await?;
     let total = suggestions.len() + pending_apps.len();
@@ -437,7 +444,10 @@ async fn pending_page_view(
     // Interleave both queues into a single ordered list of render actions.
     enum Item {
         Sugg(crate::db::suggestions::SuggestionRecord),
-        Apk(Box<crate::db::custom_apps::CustomAppVersionRecord>, crate::db::custom_apps::CustomAppRecord),
+        Apk(
+            Box<crate::db::custom_apps::CustomAppVersionRecord>,
+            crate::db::custom_apps::CustomAppRecord,
+        ),
     }
     let mut items: Vec<Item> = Vec::with_capacity(total);
     for s in suggestions {
@@ -449,11 +459,14 @@ async fn pending_page_view(
 
     let pages = total_pages(total, PENDING_PAGE_SIZE);
     let page = page.min(pages - 1);
-    let chunk = &items[page * PENDING_PAGE_SIZE..(page * PENDING_PAGE_SIZE + PENDING_PAGE_SIZE).min(total)];
+    let chunk =
+        &items[page * PENDING_PAGE_SIZE..(page * PENDING_PAGE_SIZE + PENDING_PAGE_SIZE).min(total)];
 
     let mut text = format!(
         "📋 <b>Очередь модерации</b> ({} заявок, стр. {}/{})",
-        total, page + 1, pages
+        total,
+        page + 1,
+        pages
     );
 
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
@@ -499,7 +512,10 @@ async fn pending_page_view(
     }
 
     rows.extend(nav_row("adm:pending", page, pages));
-    rows.push(vec![btn("🔁 Обновить", "adm:pending:0"), btn("⬅️ В панель", "adm:root")]);
+    rows.push(vec![
+        btn("🔁 Обновить", "adm:pending:0"),
+        btn("⬅️ В панель", "adm:root"),
+    ]);
 
     Ok((text, InlineKeyboardMarkup::new(rows)))
 }
@@ -512,7 +528,11 @@ async fn admins_view(db: &Database, user_id: i64) -> Result<(String, InlineKeybo
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
 
     for a in admins {
-        let badge = if a.is_owner { "👑 Владелец" } else { "👤 Админ" };
+        let badge = if a.is_owner {
+            "👑 Владелец"
+        } else {
+            "👤 Админ"
+        };
         text.push_str(&format!("\n• {} — {}", a.display_name(), badge));
         if is_owner && !a.is_owner {
             rows.push(vec![btn(
@@ -536,7 +556,8 @@ pub async fn apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
     let apps = db.custom_apps().list_approved_apps().await?;
     let pages = total_pages(apps.len(), APPS_PAGE_SIZE);
     let page = page.min(pages - 1);
-    let chunk = &apps[page * APPS_PAGE_SIZE..(page * APPS_PAGE_SIZE + APPS_PAGE_SIZE).min(apps.len())];
+    let chunk =
+        &apps[page * APPS_PAGE_SIZE..(page * APPS_PAGE_SIZE + APPS_PAGE_SIZE).min(apps.len())];
 
     let mut text = format!(
         "📱 <b>Опубликованные приложения</b> ({}, стр. {}/{})",
@@ -545,7 +566,9 @@ pub async fn apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
         pages
     );
     if apps.is_empty() {
-        text.push_str("\n\n📭 Опубликованных приложений пока нет.\nПредложить свое: <code>/submitapk</code>");
+        text.push_str(
+            "\n\n📭 Опубликованных приложений пока нет.\nПредложить свое: <code>/submitapk</code>",
+        );
     }
 
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
@@ -574,7 +597,8 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
     let apps = db.custom_apps().list_approved_apps().await?;
     let pages = total_pages(apps.len(), APPS_PAGE_SIZE);
     let page = page.min(pages - 1);
-    let chunk = &apps[page * APPS_PAGE_SIZE..(page * APPS_PAGE_SIZE + APPS_PAGE_SIZE).min(apps.len())];
+    let chunk =
+        &apps[page * APPS_PAGE_SIZE..(page * APPS_PAGE_SIZE + APPS_PAGE_SIZE).min(apps.len())];
 
     let mut text = format!(
         "📱 <b>Каталог опубликованных приложений</b> ({}, стр. {}/{})\n\nВыберите приложение для просмотра, редактирования или публикации:",
@@ -583,7 +607,9 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
         pages
     );
     if apps.is_empty() {
-        text = "📱 <b>Каталог опубликованных приложений</b>\n\n📭 Пока нет опубликованных приложений.".to_string();
+        text =
+            "📱 <b>Каталог опубликованных приложений</b>\n\n📭 Пока нет опубликованных приложений."
+                .to_string();
     }
 
     let mut rows: Vec<Vec<InlineKeyboardButton>> = Vec::new();
@@ -596,9 +622,10 @@ async fn adm_apps_page_view(db: &Database, page: usize) -> Result<(String, Inlin
             .flatten()
             .map(|v| format!(" (v{})", encode_text(&v.version)))
             .unwrap_or_default();
-        rows.push(vec![
-            btn(format!("📱 {}{}", app.name, ver_str), format!("adm:app:{}", app.id)),
-        ]);
+        rows.push(vec![btn(
+            format!("📱 {}{}", app.name, ver_str),
+            format!("adm:app:{}", app.id),
+        )]);
     }
 
     rows.extend(nav_row("adm:apps", page, pages));
@@ -639,12 +666,16 @@ async fn app_detail_view(db: &Database, app_id: i64) -> Result<(String, InlineKe
     };
 
     let desc_line = match app.description.as_deref() {
-        Some(d) if !d.trim().is_empty() => format!("\n📝 Описание: <i>{}</i>", encode_text(d.trim())),
+        Some(d) if !d.trim().is_empty() => {
+            format!("\n📝 Описание: <i>{}</i>", encode_text(d.trim()))
+        }
         _ => "\n📝 Описание: <i>не задано</i>".to_string(),
     };
 
     let guide_line = match app.guide_url.as_deref() {
-        Some(g) if !g.trim().is_empty() => format!("\n📖 Гайд: <code>{}</code>", encode_text(g.trim())),
+        Some(g) if !g.trim().is_empty() => {
+            format!("\n📖 Гайд: <code>{}</code>", encode_text(g.trim()))
+        }
         _ => "\n📖 Гайд: <i>не задан</i>".to_string(),
     };
 
@@ -760,7 +791,9 @@ async fn audit_page_view(db: &Database, page: usize) -> Result<(String, InlineKe
 
     let mut text = format!(
         "📜 <b>Журнал действий администраторов</b> ({}, стр. {}/{})",
-        total, page + 1, pages
+        total,
+        page + 1,
+        pages
     );
     if actions.is_empty() {
         text.push_str("\n\n📭 Пока нет записей.");
@@ -911,10 +944,13 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("repopost:") {
-        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
             if let Some(msg) = &q.message {
-                bot.send_message(msg.chat().id, "⚠️ Репозиторий не найден.").await?;
+                bot.send_message(msg.chat().id, "⚠️ Репозиторий не найден.")
+                    .await?;
             }
             return Ok(());
         };
@@ -926,12 +962,16 @@ pub async fn handle_panel_callback(
 
         let Some(client) = crate::services::github::global() else {
             if let Some(msg) = &q.message {
-                bot.send_message(msg.chat().id, "❌ Клиент GitHub не инициализирован.").await?;
+                bot.send_message(msg.chat().id, "❌ Клиент GitHub не инициализирован.")
+                    .await?;
             }
             return Ok(());
         };
 
-        match client.check_repo(&tool.owner, &tool.repo, None, None, true, false, true).await {
+        match client
+            .check_repo(&tool.owner, &tool.repo, None, None, true, false, true)
+            .await
+        {
             Ok(crate::services::github::CheckResult::NewUpdate(update)) => {
                 let tags = db
                     .tags()
@@ -955,6 +995,7 @@ pub async fn handle_panel_callback(
 
                 let post = PostData {
                     title: format!("{}/{} • {}", tool.owner, tool.repo, update.title),
+                    repo_url: Some(format!("https://github.com/{}/{}", tool.owner, tool.repo)),
                     description: tool.description.clone(),
                     body: update.body,
                     diff_url: Some(update.url),
@@ -1035,17 +1076,21 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("apppost:") {
-        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
             if let Some(msg) = &q.message {
-                bot.send_message(msg.chat().id, "⚠️ Приложение не найдено.").await?;
+                bot.send_message(msg.chat().id, "⚠️ Приложение не найдено.")
+                    .await?;
             }
             return Ok(());
         };
 
         let Some(ver) = db.custom_apps().get_current_version(app.id).await? else {
             if let Some(msg) = &q.message {
-                bot.send_message(msg.chat().id, "⚠️ У приложения нет опубликованных версий.").await?;
+                bot.send_message(msg.chat().id, "⚠️ У приложения нет опубликованных версий.")
+                    .await?;
             }
             return Ok(());
         };
@@ -1070,11 +1115,28 @@ pub async fn handle_panel_callback(
             ver.submitted_by_username.clone(),
         );
 
-        match send_post(bot, target_chat_id, target_thread_id, &post).await {
-            Ok(_) => {
-                let ver_files = db.custom_apps().get_apk_files(ver.id).await.unwrap_or_default();
+        // Remove the previous posts of this version so the republished card
+        // replaces them instead of duplicating in the topic.
+        for msg_id in db
+            .custom_apps()
+            .get_published_message_ids_for_version(ver.id)
+            .await
+            .unwrap_or_default()
+        {
+            let _ = bot
+                .delete_message(ChatId(target_chat_id), MessageId(msg_id as i32))
+                .await;
+        }
+
+        match send_post_full(bot, target_chat_id, target_thread_id, &post).await {
+            Ok(published_ids) => {
+                let ver_files = db
+                    .custom_apps()
+                    .get_apk_files(ver.id)
+                    .await
+                    .unwrap_or_default();
                 if !ver_files.is_empty() {
-                    let _ = send_apk_documents(
+                    let (doc_ids, _) = send_apk_documents(
                         bot,
                         target_chat_id,
                         target_thread_id,
@@ -1083,6 +1145,17 @@ pub async fn handle_panel_callback(
                         &ver.version,
                     )
                     .await;
+                    let mut all_ids = published_ids;
+                    all_ids.extend(doc_ids);
+                    let _ = db
+                        .custom_apps()
+                        .set_published_message_ids(ver.id, &all_ids)
+                        .await;
+                } else {
+                    let _ = db
+                        .custom_apps()
+                        .set_published_message_ids(ver.id, &published_ids)
+                        .await;
                 }
                 let _ = db
                     .audit()
@@ -1114,19 +1187,25 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("repo:") {
-        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let (text, kb) = repo_detail_view(db, tool_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("repountrack:") {
-        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let (text, kb) = repo_untrack_confirm_view(db, tool_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("repountrackok:") {
-        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         if let Some(tool) = db.tools().get_tool_by_id(tool_id).await? {
             let _ = db.tools().remove_tool(&tool.owner, &tool.repo).await?;
             let _ = db
@@ -1139,14 +1218,16 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("repodesc:") {
-        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
             return Ok(());
         };
         dialogue
-            .update(DialogueState::Admin(Box::new(AdminState::RepoDescription {
-                tool_id,
-            })))
+            .update(DialogueState::Admin(Box::new(
+                AdminState::RepoDescription { tool_id },
+            )))
             .await?;
         if let Some(msg) = &q.message {
             let cur_desc = tool
@@ -1172,7 +1253,9 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("repoguide:") {
-        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
             return Ok(());
         };
@@ -1182,11 +1265,7 @@ pub async fn handle_panel_callback(
             })))
             .await?;
         if let Some(msg) = &q.message {
-            let cur_guide = tool
-                .guide_url
-                .as_deref()
-                .unwrap_or("не указан")
-                .to_string();
+            let cur_guide = tool.guide_url.as_deref().unwrap_or("не указан").to_string();
             bot.send_message(
                 msg.chat().id,
                 format!(
@@ -1205,7 +1284,9 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("appdesc:") {
-        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
             return Ok(());
         };
@@ -1215,7 +1296,11 @@ pub async fn handle_panel_callback(
             })))
             .await?;
         if let Some(msg) = &q.message {
-            let cur_desc = app.description.as_deref().unwrap_or("не задано").to_string();
+            let cur_desc = app
+                .description
+                .as_deref()
+                .unwrap_or("не задано")
+                .to_string();
             bot.send_message(
                 msg.chat().id,
                 format!(
@@ -1234,7 +1319,9 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("appguide:") {
-        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
             return Ok(());
         };
@@ -1263,13 +1350,17 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("repotags:") {
-        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let (text, kb) = repo_tags_view(db, tool_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("repotagadd:") {
-        let Some(tool_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tool_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
             return Ok(());
         };
@@ -1293,11 +1384,16 @@ pub async fn handle_panel_callback(
 
     if let Some(ids) = rest.strip_prefix("repotagdel:") {
         let mut parts = ids.split(':');
-        let (Some(tool_id), Some(tag_id)) = (parts.next().and_then(parse_id), parts.next().and_then(parse_id))
-        else {
+        let (Some(tool_id), Some(tag_id)) = (
+            parts.next().and_then(parse_id),
+            parts.next().and_then(parse_id),
+        ) else {
             return Ok(());
         };
-        let _ = db.tags().detach_tag(ItemType::Tool, tool_id, tag_id).await?;
+        let _ = db
+            .tags()
+            .detach_tag(ItemType::Tool, tool_id, tag_id)
+            .await?;
         let (text, kb) = repo_tags_view(db, tool_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
@@ -1325,19 +1421,25 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("tag:") {
-        let Some(tag_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tag_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let (text, kb) = tag_detail_view(db, tag_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("tagdel:") {
-        let Some(tag_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tag_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let (text, kb) = tag_delete_confirm_view(db, tag_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("tagdelok:") {
-        let Some(tag_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(tag_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let tag_name = db
             .tags()
             .list_tags()
@@ -1371,19 +1473,25 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("app:") {
-        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let (text, kb) = app_detail_view(db, app_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("apptags:") {
-        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let (text, kb) = app_tags_view(db, app_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("apptagadd:") {
-        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
             return Ok(());
         };
@@ -1407,23 +1515,32 @@ pub async fn handle_panel_callback(
 
     if let Some(ids) = rest.strip_prefix("apptagdel:") {
         let mut parts = ids.split(':');
-        let (Some(app_id), Some(tag_id)) = (parts.next().and_then(parse_id), parts.next().and_then(parse_id))
-        else {
+        let (Some(app_id), Some(tag_id)) = (
+            parts.next().and_then(parse_id),
+            parts.next().and_then(parse_id),
+        ) else {
             return Ok(());
         };
-        let _ = db.tags().detach_tag(ItemType::CustomApp, app_id, tag_id).await?;
+        let _ = db
+            .tags()
+            .detach_tag(ItemType::CustomApp, app_id, tag_id)
+            .await?;
         let (text, kb) = app_tags_view(db, app_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("appdel:") {
-        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         let (text, kb) = app_delete_confirm_view(db, app_id).await?;
         return edit_or_send(bot, q, text, kb).await;
     }
 
     if let Some(id_str) = rest.strip_prefix("appdelok:") {
-        let Some(app_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(app_id) = parse_id(id_str) else {
+            return Ok(());
+        };
 
         // Remove the published channel/group posts first (best-effort).
         let mut removed_posts = 0usize;
@@ -1458,7 +1575,11 @@ pub async fn handle_panel_callback(
                 .log_action(
                     user_id,
                     "удалил приложение",
-                    &format!("{} (постов удалено: {})", app_name.unwrap_or_default(), removed_posts),
+                    &format!(
+                        "{} (постов удалено: {})",
+                        app_name.unwrap_or_default(),
+                        removed_posts
+                    ),
                 )
                 .await;
         }
@@ -1487,7 +1608,9 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("admdel:") {
-        let Some(admin_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(admin_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         if !db.admins().is_owner(user_id).await? {
             if let Some(msg) = &q.message {
                 bot.send_message(msg.chat().id, ACCESS_DENIED)
@@ -1496,10 +1619,7 @@ pub async fn handle_panel_callback(
             }
             return Ok(());
         }
-        let text = format!(
-            "🗑 Убрать администратора <code>{}</code>?",
-            admin_id
-        );
+        let text = format!("🗑 Убрать администратора <code>{}</code>?", admin_id);
         let kb = InlineKeyboardMarkup::new(vec![vec![
             btn("✅ Да, убрать", format!("adm:admdelok:{}", admin_id)),
             btn("❌ Отмена", "adm:admins"),
@@ -1508,7 +1628,9 @@ pub async fn handle_panel_callback(
     }
 
     if let Some(id_str) = rest.strip_prefix("admdelok:") {
-        let Some(admin_id) = parse_id(id_str) else { return Ok(()) };
+        let Some(admin_id) = parse_id(id_str) else {
+            return Ok(());
+        };
         if !db.admins().is_owner(user_id).await? {
             if let Some(msg) = &q.message {
                 bot.send_message(msg.chat().id, ACCESS_DENIED)
@@ -1520,9 +1642,15 @@ pub async fn handle_panel_callback(
         let removed = db.admins().remove_admin(admin_id).await.unwrap_or(false);
         let (text, kb) = admins_view(db, user_id).await?;
         let text = if removed {
-            format!("✅ Администратор <code>{}</code> удален.\n\n{}", admin_id, text)
+            format!(
+                "✅ Администратор <code>{}</code> удален.\n\n{}",
+                admin_id, text
+            )
         } else {
-            format!("ℹ️ Пользователь <code>{}</code> не найден среди админов.\n\n{}", admin_id, text)
+            format!(
+                "ℹ️ Пользователь <code>{}</code> не найден среди админов.\n\n{}",
+                admin_id, text
+            )
         };
         return edit_or_send(bot, q, text, kb).await;
     }

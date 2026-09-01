@@ -117,7 +117,10 @@ async fn main() -> Result<()> {
 
     // Sync static repos from config file/env to database
     for repo in &config.repos {
-        let _ = db.tools().add_tool(&repo.owner, &repo.name, 0, None, None).await;
+        let _ = db
+            .tools()
+            .add_tool(&repo.owner, &repo.name, 0, None, None)
+            .await;
     }
 
     let bot = Bot::new(&config.telegram_bot_token);
@@ -126,7 +129,10 @@ async fn main() -> Result<()> {
     // Process-wide GitHub client for one-off validation calls
     // (repo existence checks on /track, suggestion approval, admin dialogues).
     if let Err(e) = crate::services::github::init_global(config.github_token.clone()) {
-        error!("Не удалось инициализировать глобальный GitHub-клиент: {:?}", e);
+        error!(
+            "Не удалось инициализировать глобальный GitHub-клиент: {:?}",
+            e
+        );
     }
 
     // Register bot commands with Telegram UI autocomplete

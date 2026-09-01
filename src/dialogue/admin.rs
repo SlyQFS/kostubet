@@ -31,8 +31,7 @@ pub async fn handle_admin_message(
     if text == "/cancel" || text == "/start" {
         dialogue.exit().await?;
         if text == "/cancel" {
-            bot.send_message(chat_id, "❌ Действие отменено.")
-                .await?;
+            bot.send_message(chat_id, "❌ Действие отменено.").await?;
         }
         return Ok(());
     }
@@ -147,7 +146,10 @@ pub async fn handle_admin_message(
                 if let Err(err) = validate_description(&text) {
                     bot.send_message(
                         chat_id,
-                        format!("{}\n\nПовторите ввод или отправьте <code>/skip</code>.", err),
+                        format!(
+                            "{}\n\nПовторите ввод или отправьте <code>/skip</code>.",
+                            err
+                        ),
                     )
                     .parse_mode(ParseMode::Html)
                     .await?;
@@ -247,7 +249,11 @@ pub async fn handle_admin_message(
 
             let _ = db
                 .audit()
-                .log_action(sender_id, "добавил репозиторий", &format!("{}/{}", owner, name))
+                .log_action(
+                    sender_id,
+                    "добавил репозиторий",
+                    &format!("{}/{}", owner, name),
+                )
                 .await;
 
             dialogue.exit().await?;
@@ -273,7 +279,8 @@ pub async fn handle_admin_message(
 
             if text == "/skip" {
                 dialogue.exit().await?;
-                bot.send_message(chat_id, "ℹ️ Описание не изменено.").await?;
+                bot.send_message(chat_id, "ℹ️ Описание не изменено.")
+                    .await?;
                 return Ok(());
             }
 
@@ -281,11 +288,7 @@ pub async fn handle_admin_message(
                 db.tools().set_tool_description(tool_id, None).await?;
                 let _ = db
                     .audit()
-                    .log_action(
-                        sender_id,
-                        "удалил описание репозитория",
-                        &tool.full_name(),
-                    )
+                    .log_action(sender_id, "удалил описание репозитория", &tool.full_name())
                     .await;
                 dialogue.exit().await?;
                 bot.send_message(
@@ -323,12 +326,13 @@ pub async fn handle_admin_message(
                 .log_action(sender_id, "изменил описание репозитория", &tool.full_name())
                 .await;
             dialogue.exit().await?;
-            let kb = InlineKeyboardMarkup::new(vec![
-                vec![
-                    InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:repopost:{}", tool_id)),
-                    InlineKeyboardButton::callback("📦 Репозиторий", format!("adm:repo:{}", tool_id)),
-                ],
-            ]);
+            let kb = InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback(
+                    "📢 Опубликовать",
+                    format!("adm:repopost:{}", tool_id),
+                ),
+                InlineKeyboardButton::callback("📦 Репозиторий", format!("adm:repo:{}", tool_id)),
+            ]]);
             bot.send_message(
                 chat_id,
                 format!(
@@ -351,7 +355,8 @@ pub async fn handle_admin_message(
 
             if text == "/skip" {
                 dialogue.exit().await?;
-                bot.send_message(chat_id, "ℹ️ Описание не изменено.").await?;
+                bot.send_message(chat_id, "ℹ️ Описание не изменено.")
+                    .await?;
                 return Ok(());
             }
 
@@ -362,12 +367,13 @@ pub async fn handle_admin_message(
                     .log_action(sender_id, "удалил описание приложения", &app.name)
                     .await;
                 dialogue.exit().await?;
-                let kb = InlineKeyboardMarkup::new(vec![
-                    vec![
-                        InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:apppost:{}", app_id)),
-                        InlineKeyboardButton::callback("📱 К приложениям", "adm:apps:0"),
-                    ],
-                ]);
+                let kb = InlineKeyboardMarkup::new(vec![vec![
+                    InlineKeyboardButton::callback(
+                        "📢 Опубликовать",
+                        format!("adm:apppost:{}", app_id),
+                    ),
+                    InlineKeyboardButton::callback("📱 К приложениям", "adm:apps:0"),
+                ]]);
                 bot.send_message(
                     chat_id,
                     format!(
@@ -404,12 +410,13 @@ pub async fn handle_admin_message(
                 .log_action(sender_id, "изменил описание приложения", &app.name)
                 .await;
             dialogue.exit().await?;
-            let kb = InlineKeyboardMarkup::new(vec![
-                vec![
-                    InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:apppost:{}", app_id)),
-                    InlineKeyboardButton::callback("📱 К приложениям", "adm:apps:0"),
-                ],
-            ]);
+            let kb = InlineKeyboardMarkup::new(vec![vec![
+                InlineKeyboardButton::callback(
+                    "📢 Опубликовать",
+                    format!("adm:apppost:{}", app_id),
+                ),
+                InlineKeyboardButton::callback("📱 К приложениям", "adm:apps:0"),
+            ]]);
             bot.send_message(
                 chat_id,
                 format!(
@@ -425,13 +432,15 @@ pub async fn handle_admin_message(
         AdminState::RepoGuide { tool_id } => {
             let Some(tool) = db.tools().get_tool_by_id(tool_id).await? else {
                 dialogue.exit().await?;
-                bot.send_message(chat_id, "⚠️ Репозиторий не найден.").await?;
+                bot.send_message(chat_id, "⚠️ Репозиторий не найден.")
+                    .await?;
                 return Ok(());
             };
 
             if text == "/skip" {
                 dialogue.exit().await?;
-                bot.send_message(chat_id, "ℹ️ Руководство не изменено.").await?;
+                bot.send_message(chat_id, "ℹ️ Руководство не изменено.")
+                    .await?;
                 return Ok(());
             }
 
@@ -440,25 +449,38 @@ pub async fn handle_admin_message(
                 dialogue.exit().await?;
                 bot.send_message(
                     chat_id,
-                    format!("✅ Руководство для <b>{}</b> удалено.", encode_text(&tool.full_name())),
+                    format!(
+                        "✅ Руководство для <b>{}</b> удалено.",
+                        encode_text(&tool.full_name())
+                    ),
                 )
                 .parse_mode(ParseMode::Html)
                 .await?;
                 return Ok(());
             }
 
-            let (guide_url, guide_text) = if text.starts_with("http://") || text.starts_with("https://") {
+            let (guide_url, guide_text) = if text.starts_with("http://")
+                || text.starts_with("https://")
+            {
                 (Some(text.clone()), None)
             } else {
-                let url = crate::services::telegraph::publish_text_guide(&tool.full_name(), None, &text).await.ok();
+                let url =
+                    crate::services::telegraph::publish_text_guide(&tool.full_name(), None, &text)
+                        .await
+                        .ok();
                 (url, Some(text.clone()))
             };
 
-            db.tools().set_tool_guide(tool_id, guide_url.as_deref(), guide_text.as_deref()).await?;
+            db.tools()
+                .set_tool_guide(tool_id, guide_url.as_deref(), guide_text.as_deref())
+                .await?;
             dialogue.exit().await?;
             let link_msg = guide_url.as_deref().unwrap_or("сохранено как текст");
             let kb = InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:repopost:{}", tool_id)),
+                InlineKeyboardButton::callback(
+                    "📢 Опубликовать",
+                    format!("adm:repopost:{}", tool_id),
+                ),
                 InlineKeyboardButton::callback("📦 К репозиторию", format!("adm:repo:{}", tool_id)),
             ]]);
             bot.send_message(
@@ -477,13 +499,15 @@ pub async fn handle_admin_message(
         AdminState::AppGuide { app_id } => {
             let Some(app) = db.custom_apps().get_app_by_id(app_id).await? else {
                 dialogue.exit().await?;
-                bot.send_message(chat_id, "⚠️ Приложение не найдено.").await?;
+                bot.send_message(chat_id, "⚠️ Приложение не найдено.")
+                    .await?;
                 return Ok(());
             };
 
             if text == "/skip" {
                 dialogue.exit().await?;
-                bot.send_message(chat_id, "ℹ️ Руководство не изменено.").await?;
+                bot.send_message(chat_id, "ℹ️ Руководство не изменено.")
+                    .await?;
                 return Ok(());
             }
 
@@ -492,25 +516,37 @@ pub async fn handle_admin_message(
                 dialogue.exit().await?;
                 bot.send_message(
                     chat_id,
-                    format!("✅ Руководство для приложения <b>{}</b> удалено.", encode_text(&app.name)),
+                    format!(
+                        "✅ Руководство для приложения <b>{}</b> удалено.",
+                        encode_text(&app.name)
+                    ),
                 )
                 .parse_mode(ParseMode::Html)
                 .await?;
                 return Ok(());
             }
 
-            let (guide_url, guide_text) = if text.starts_with("http://") || text.starts_with("https://") {
+            let (guide_url, guide_text) = if text.starts_with("http://")
+                || text.starts_with("https://")
+            {
                 (Some(text.clone()), None)
             } else {
-                let url = crate::services::telegraph::publish_text_guide(&app.name, None, &text).await.ok();
+                let url = crate::services::telegraph::publish_text_guide(&app.name, None, &text)
+                    .await
+                    .ok();
                 (url, Some(text.clone()))
             };
 
-            db.custom_apps().set_app_guide(app_id, guide_url.as_deref(), guide_text.as_deref()).await?;
+            db.custom_apps()
+                .set_app_guide(app_id, guide_url.as_deref(), guide_text.as_deref())
+                .await?;
             dialogue.exit().await?;
             let link_msg = guide_url.as_deref().unwrap_or("сохранено как текст");
             let kb = InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("📢 Опубликовать", format!("adm:apppost:{}", app_id)),
+                InlineKeyboardButton::callback(
+                    "📢 Опубликовать",
+                    format!("adm:apppost:{}", app_id),
+                ),
                 InlineKeyboardButton::callback("📱 К приложению", format!("adm:app:{}", app_id)),
             ]]);
             bot.send_message(
@@ -528,9 +564,12 @@ pub async fn handle_admin_message(
 
         AdminState::NewTag => {
             if text.is_empty() {
-                bot.send_message(chat_id, "❌ Тег не может быть пустым. Отправьте название или <code>/cancel</code>.")
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                bot.send_message(
+                    chat_id,
+                    "❌ Тег не может быть пустым. Отправьте название или <code>/cancel</code>.",
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
                 return Ok(());
             }
 
@@ -542,7 +581,10 @@ pub async fn handle_admin_message(
                     ]]);
                     bot.send_message(
                         chat_id,
-                        format!("✅ Тег <b>#{}</b> создан.", crate::db::tags::normalize_tag(&text)),
+                        format!(
+                            "✅ Тег <b>#{}</b> создан.",
+                            crate::db::tags::normalize_tag(&text)
+                        ),
                     )
                     .reply_markup(kb)
                     .parse_mode(ParseMode::Html)
@@ -562,9 +604,12 @@ pub async fn handle_admin_message(
             item_label,
         } => {
             if text.is_empty() {
-                bot.send_message(chat_id, "❌ Тег не может быть пустым. Отправьте название или <code>/cancel</code>.")
-                    .parse_mode(ParseMode::Html)
-                    .await?;
+                bot.send_message(
+                    chat_id,
+                    "❌ Тег не может быть пустым. Отправьте название или <code>/cancel</code>.",
+                )
+                .parse_mode(ParseMode::Html)
+                .await?;
                 return Ok(());
             }
 
@@ -575,24 +620,41 @@ pub async fn handle_admin_message(
                 let _ = db.tags().attach_tag(it, item_id, tag_id).await;
                 let kb = if it == ItemType::CustomApp {
                     InlineKeyboardMarkup::new(vec![vec![
-                        InlineKeyboardButton::callback("🏷 Теги приложения", format!("adm:apptags:{}", item_id)),
-                        InlineKeyboardButton::callback("📱 К приложению", format!("adm:app:{}", item_id)),
+                        InlineKeyboardButton::callback(
+                            "🏷 Теги приложения",
+                            format!("adm:apptags:{}", item_id),
+                        ),
+                        InlineKeyboardButton::callback(
+                            "📱 К приложению",
+                            format!("adm:app:{}", item_id),
+                        ),
                     ]])
                 } else {
                     InlineKeyboardMarkup::new(vec![vec![
-                        InlineKeyboardButton::callback("🏷 Теги репозитория", format!("adm:repotags:{}", item_id)),
-                        InlineKeyboardButton::callback("📦 К репозиторию", format!("adm:repo:{}", item_id)),
+                        InlineKeyboardButton::callback(
+                            "🏷 Теги репозитория",
+                            format!("adm:repotags:{}", item_id),
+                        ),
+                        InlineKeyboardButton::callback(
+                            "📦 К репозиторию",
+                            format!("adm:repo:{}", item_id),
+                        ),
                     ]])
                 };
                 bot.send_message(
                     chat_id,
-                    format!("✅ Тег <b>#{}</b> добавлен к <b>{}</b>.", tag_name, encode_text(&item_label)),
+                    format!(
+                        "✅ Тег <b>#{}</b> добавлен к <b>{}</b>.",
+                        tag_name,
+                        encode_text(&item_label)
+                    ),
                 )
                 .reply_markup(kb)
                 .parse_mode(ParseMode::Html)
                 .await?;
             } else {
-                bot.send_message(chat_id, "❌ Ошибка создания тега.").await?;
+                bot.send_message(chat_id, "❌ Ошибка создания тега.")
+                    .await?;
             }
             dialogue.exit().await?;
         }

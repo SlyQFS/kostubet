@@ -221,7 +221,9 @@ fn compute_layout(images: &[DynamicImage]) -> (u32, u32, Vec<CardPlacement>) {
                 (CANVAS_WIDTH, canvas_h, placements)
             } else if landscape_indices.len() == 2 {
                 // 2 landscape + 1 portrait: Split column layout
-                let p_idx = (0..3).find(|&i| !landscape_indices.contains(&i)).unwrap_or(0);
+                let p_idx = (0..3)
+                    .find(|&i| !landscape_indices.contains(&i))
+                    .unwrap_or(0);
                 let l1 = landscape_indices[0];
                 let l2 = landscape_indices[1];
 
@@ -454,7 +456,9 @@ fn fill_card(img: &DynamicImage, target_w: u32, target_h: u32) -> DynamicImage {
         resized.crop_imm(crop_x, crop_y, target_w, target_h)
     } else {
         // Aspect ratios strongly differ: letterbox with blurred background of the same image
-        let bg_fill = img.resize_exact(target_w / 4, target_h / 4, FilterType::Triangle).to_rgba8();
+        let bg_fill = img
+            .resize_exact(target_w / 4, target_h / 4, FilterType::Triangle)
+            .to_rgba8();
         let bg_blurred = imageops::blur(&bg_fill, 10.0);
         let mut card_bg = DynamicImage::ImageRgba8(bg_blurred)
             .resize_exact(target_w, target_h, FilterType::Triangle)
@@ -475,7 +479,9 @@ fn fill_card(img: &DynamicImage, target_w: u32, target_h: u32) -> DynamicImage {
         let fit_w = ((w as f32 * scale).round() as u32).max(1);
         let fit_h = ((h as f32 * scale).round() as u32).max(1);
 
-        let foreground = img.resize_exact(fit_w, fit_h, FilterType::Lanczos3).to_rgba8();
+        let foreground = img
+            .resize_exact(fit_w, fit_h, FilterType::Lanczos3)
+            .to_rgba8();
 
         let ox = (target_w.saturating_sub(fit_w)) / 2;
         let oy = (target_h.saturating_sub(fit_h)) / 2;
@@ -530,13 +536,7 @@ fn apply_card_styling(img: &DynamicImage, radius: u32) -> RgbaImage {
 }
 
 /// Draws a subtle soft drop shadow behind a screenshot card.
-fn draw_card_shadow(
-    canvas: &mut RgbaImage,
-    card_x: u32,
-    card_y: u32,
-    card_w: u32,
-    card_h: u32,
-) {
+fn draw_card_shadow(canvas: &mut RgbaImage, card_x: u32, card_y: u32, card_w: u32, card_h: u32) {
     let shadow_offset_y = 8i32;
     let shadow_spread = 14i32;
     let (cw, ch) = (canvas.width() as i32, canvas.height() as i32);
@@ -642,7 +642,7 @@ mod tests {
     fn test_three_mixed_images_collage() {
         // 1 vertical, 1 horizontal, 1 vertical (matches user's screenshot)
         let img1 = make_test_image_bytes(300, 450, Rgb([60, 140, 240])); // Blue Portrait
-        let img2 = make_test_image_bytes(600, 300, Rgb([240, 180, 60]));  // Yellow Landscape
+        let img2 = make_test_image_bytes(600, 300, Rgb([240, 180, 60])); // Yellow Landscape
         let img3 = make_test_image_bytes(300, 450, Rgb([240, 80, 140])); // Pink Portrait
 
         let result = create_collage(&[img1, img2, img3]).unwrap();

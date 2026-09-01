@@ -30,9 +30,10 @@ pub fn edit_skip_or_cancel_keyboard() -> InlineKeyboardMarkup {
 
 #[allow(dead_code)]
 pub fn edit_cancel_keyboard() -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("❌ Отменить", "edit_flow:cancel"),
-    ]])
+    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+        "❌ Отменить",
+        "edit_flow:cancel",
+    )]])
 }
 
 #[tracing::instrument(skip(bot, dialogue, _db))]
@@ -90,7 +91,10 @@ pub async fn handle_edit_message(
                 if let Err(err) = crate::dialogue::validate_description(text) {
                     bot.send_message(
                         chat_id,
-                        format!("{}\n\nПовторите ввод, <code>/skip</code> или <code>/clear</code>.", err),
+                        format!(
+                            "{}\n\nПовторите ввод, <code>/skip</code> или <code>/clear</code>.",
+                            err
+                        ),
                     )
                     .reply_markup(edit_skip_clear_cancel_keyboard())
                     .parse_mode(ParseMode::Html)
@@ -192,7 +196,9 @@ pub async fn handle_edit_message(
                         &data.app_name,
                         data.submitted_by_username.as_deref(),
                         text,
-                    ).await {
+                    )
+                    .await
+                    {
                         data.guide_url = Some(url);
                     }
                 }

@@ -4,12 +4,54 @@ use crate::db::tags::ItemType;
 use crate::db::Database;
 use crate::dialogue::state::{DialogueState, EditApkData, EditApkState};
 use crate::dialogue::BotDialogue;
-use crate::services::render::{build_apk_post_data, render_post_text, send_apk_documents, send_post};
+use crate::services::render::{
+    build_apk_post_data, render_post_text, send_apk_documents, send_post_full,
+};
 use anyhow::Result;
 use html_escape::encode_text;
 use teloxide::prelude::*;
-use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode};
+use teloxide::types::{ChatId, InlineKeyboardButton, InlineKeyboardMarkup, MessageId, ParseMode};
 use tracing::{error, info, warn};
+
+/// Deletes all Telegram messages of the app's previously published version
+/// (card, changelog, APK documents), so a new update replaces the old posts
+/// instead of cluttering the topic — same behavior as tracked repositories.
+/// Best-effort: individual deletion failures are ignored. Returns the number
+/// of deleted messages.
+async fn delete_previous_app_messages(
+    bot: &Bot,
+    db: &Database,
+    app_id: i64,
+    chat_id: i64,
+    exclude_version_id: i64,
+) -> usize {
+    let mut deleted = 0usize;
+
+    let previous = match db.custom_apps().get_current_version(app_id).await {
+        Ok(Some(prev)) => prev,
+        _ => return 0,
+    };
+    if previous.id == exclude_version_id {
+        return 0;
+    }
+
+    let prev_ids = db
+        .custom_apps()
+        .get_published_message_ids_for_version(previous.id)
+        .await
+        .unwrap_or_default();
+
+    for msg_id in prev_ids {
+        if bot
+            .delete_message(ChatId(chat_id), MessageId(msg_id as i32))
+            .await
+            .is_ok()
+        {
+            deleted += 1;
+        }
+    }
+    deleted
+}
 
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_apk_approve(
@@ -80,7 +122,10 @@ pub async fn handle_apk_approve(
     // to the moderation queue instead of hanging as approved-but-unpublished.
     if target_chat_id == 0 {
         let _ = db.custom_apps().reset_version_to_pending(ver_id).await;
-        error!("Cannot publish APK version {}: TELEGRAM_CHAT_ID is not configured", ver_id);
+        error!(
+            "Cannot publish APK version {}: TELEGRAM_CHAT_ID is not configured",
+            ver_id
+        );
         if let Some(msg) = &q.message {
             let _ = bot
                 .edit_message_text(
@@ -97,8 +142,18 @@ pub async fn handle_apk_approve(
         return Ok(());
     }
 
-    let published_msg = match send_post(bot, target_chat_id, target_thread_id, &post).await {
-        Ok(m) => m,
+    // Remove the previously published version's posts so the new update
+    // replaces them instead of piling up in the topic.
+    let removed = delete_previous_app_messages(bot, db, app.id, target_chat_id, ver_id).await;
+    if removed > 0 {
+        info!(
+            "Deleted {} previous post(s) of app {} before publishing v{}",
+            removed, app.name, ver.version
+        );
+    }
+
+    let published_ids = match send_post_full(bot, target_chat_id, target_thread_id, &post).await {
+        Ok(ids) => ids,
         Err(e) => {
             let _ = db.custom_apps().reset_version_to_pending(ver_id).await;
             error!("Failed to publish custom app APK post: {:?}", e);
@@ -126,9 +181,15 @@ pub async fn handle_apk_approve(
     // Deliver the APK files as documents right after the card. A delivery
     // failure must not roll the version back (the card is already published);
     // surface it to the admin instead.
-    let delivery_errors =
-        send_apk_documents(bot, target_chat_id, target_thread_id, &apk_files, &app.name, &ver.version)
-            .await;
+    let (doc_ids, delivery_errors) = send_apk_documents(
+        bot,
+        target_chat_id,
+        target_thread_id,
+        &apk_files,
+        &app.name,
+        &ver.version,
+    )
+    .await;
     if !delivery_errors.is_empty() {
         warn!(
             "Failed to deliver some APK files for version {}: {:?}",
@@ -149,16 +210,24 @@ pub async fn handle_apk_approve(
         .set_app_current_version(app.id, ver_id)
         .await?;
 
-    // Unconditionally store published_message_id in DB
+    // Unconditionally store all published message ids in DB (card + files)
+    let mut all_ids = published_ids.clone();
+    all_ids.extend(doc_ids.iter().copied());
     if let Err(e) = db
         .custom_apps()
-        .set_published_message_id(ver_id, published_msg.id.0 as i64)
+        .set_published_message_ids(ver_id, &all_ids)
         .await
     {
         error!(
-            "Failed to save published_message_id for APK version {}: {:?}",
+            "Failed to save published_message_ids for APK version {}: {:?}",
             ver_id, e
         );
+    }
+    if let Some(first) = published_ids.first() {
+        let _ = db
+            .custom_apps()
+            .set_published_message_id(ver_id, *first as i64)
+            .await;
     }
 
     if let Some(msg) = &q.message {
@@ -412,7 +481,11 @@ pub async fn handle_apk_edit_publish(
         if data.guide_url.is_some() {
             let _ = db
                 .custom_apps()
-                .set_app_guide(app.id, data.guide_url.as_deref(), data.guide_text.as_deref())
+                .set_app_guide(
+                    app.id,
+                    data.guide_url.as_deref(),
+                    data.guide_text.as_deref(),
+                )
                 .await;
         }
 
@@ -458,8 +531,19 @@ pub async fn handle_apk_edit_publish(
             return Ok(());
         }
 
-        let published_msg = match send_post(bot, target_chat_id, target_thread_id, &post).await {
-            Ok(m) => m,
+        // Remove the previously published version's posts so the republished
+        // update replaces them instead of piling up in the topic.
+        let removed = delete_previous_app_messages(bot, db, app.id, target_chat_id, ver_id).await;
+        if removed > 0 {
+            info!(
+                "Deleted {} previous post(s) of app {} before publishing v{}",
+                removed, app.name, ver.version
+            );
+        }
+
+        let published_ids = match send_post_full(bot, target_chat_id, target_thread_id, &post).await
+        {
+            Ok(ids) => ids,
             Err(e) => {
                 let _ = db.custom_apps().reset_version_to_pending(ver_id).await;
                 dialogue.exit().await?;
@@ -483,13 +567,9 @@ pub async fn handle_apk_edit_publish(
         db.custom_apps()
             .set_app_current_version(app.id, ver_id)
             .await?;
-        let _ = db
-            .custom_apps()
-            .set_published_message_id(ver_id, published_msg.id.0 as i64)
-            .await;
 
         // Deliver the APK files as documents right after the card.
-        let delivery_errors = send_apk_documents(
+        let (doc_ids, delivery_errors) = send_apk_documents(
             bot,
             target_chat_id,
             target_thread_id,
@@ -503,6 +583,26 @@ pub async fn handle_apk_edit_publish(
                 "Failed to deliver some APK files for version {}: {:?}",
                 ver_id, delivery_errors
             );
+        }
+
+        // Store all published message ids (card + files) for later cleanup.
+        let mut all_ids = published_ids.clone();
+        all_ids.extend(doc_ids.iter().copied());
+        if let Err(e) = db
+            .custom_apps()
+            .set_published_message_ids(ver_id, &all_ids)
+            .await
+        {
+            error!(
+                "Failed to save published_message_ids for APK version {}: {:?}",
+                ver_id, e
+            );
+        }
+        if let Some(first) = published_ids.first() {
+            let _ = db
+                .custom_apps()
+                .set_published_message_id(ver_id, *first as i64)
+                .await;
         }
 
         let _ = db
@@ -595,72 +695,132 @@ pub async fn handle_apk_edit_flow(
     };
 
     let chat_id = q.message.as_ref().map(|m| m.chat().id);
-    let Some(cid) = chat_id else { return Ok(()); };
+    let Some(cid) = chat_id else {
+        return Ok(());
+    };
 
     match (action, state) {
         ("skip", EditApkState::EditingTitle { data }) => {
-            let cur_desc = data.description.clone().unwrap_or_else(|| "не задано".to_string());
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingDescription { data })).await?;
+            let cur_desc = data
+                .description
+                .clone()
+                .unwrap_or_else(|| "не задано".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingDescription {
+                    data,
+                }))
+                .await?;
             bot.send_message(cid, format!("📝 <b>Текущее описание приложения:</b>\n<i>{}</i>\n\nВведите новое описание или используйте кнопки:", encode_text(&cur_desc)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("clear", EditApkState::EditingTitle { mut data }) => {
             data.title = None;
-            let cur_desc = data.description.clone().unwrap_or_else(|| "не задано".to_string());
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingDescription { data })).await?;
+            let cur_desc = data
+                .description
+                .clone()
+                .unwrap_or_else(|| "не задано".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingDescription {
+                    data,
+                }))
+                .await?;
             bot.send_message(cid, format!("📝 <b>Текущее описание приложения:</b>\n<i>{}</i>\n\nВведите новое описание или используйте кнопки:", encode_text(&cur_desc)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("skip", EditApkState::EditingDescription { data }) => {
-            let cur_changelog = data.changelog.clone().unwrap_or_else(|| "не указан".to_string());
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingChangelog { data })).await?;
+            let cur_changelog = data
+                .changelog
+                .clone()
+                .unwrap_or_else(|| "не указан".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingChangelog {
+                    data,
+                }))
+                .await?;
             bot.send_message(cid, format!("📝 <b>Текущий список изменений (Changelog):</b>\n<code>{}</code>\n\nВведите новый список изменений или используйте кнопки:", encode_text(&cur_changelog)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("clear", EditApkState::EditingDescription { mut data }) => {
             data.description = None;
-            let cur_changelog = data.changelog.clone().unwrap_or_else(|| "не указан".to_string());
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingChangelog { data })).await?;
+            let cur_changelog = data
+                .changelog
+                .clone()
+                .unwrap_or_else(|| "не указан".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingChangelog {
+                    data,
+                }))
+                .await?;
             bot.send_message(cid, format!("📝 <b>Текущий список изменений (Changelog):</b>\n<code>{}</code>\n\nВведите новый список изменений или используйте кнопки:", encode_text(&cur_changelog)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("skip", EditApkState::EditingChangelog { data }) => {
-            let cur_diff = data.diff_url.clone().unwrap_or_else(|| "не указана".to_string());
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingDiffUrl { data })).await?;
+            let cur_diff = data
+                .diff_url
+                .clone()
+                .unwrap_or_else(|| "не указана".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingDiffUrl {
+                    data,
+                }))
+                .await?;
             bot.send_message(cid, format!("🔗 <b>Текущая ссылка на изменения (Diff URL):</b>\n<code>{}</code>\n\nВведите новую ссылку или используйте кнопки:", encode_text(&cur_diff)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("clear", EditApkState::EditingChangelog { mut data }) => {
             data.changelog = None;
-            let cur_diff = data.diff_url.clone().unwrap_or_else(|| "не указана".to_string());
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingDiffUrl { data })).await?;
+            let cur_diff = data
+                .diff_url
+                .clone()
+                .unwrap_or_else(|| "не указана".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingDiffUrl {
+                    data,
+                }))
+                .await?;
             bot.send_message(cid, format!("🔗 <b>Текущая ссылка на изменения (Diff URL):</b>\n<code>{}</code>\n\nВведите новую ссылку или используйте кнопки:", encode_text(&cur_diff)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("skip", EditApkState::EditingDiffUrl { data }) => {
-            let cur_guide = data.guide_url.clone().unwrap_or_else(|| "не указан".to_string());
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingGuide { data })).await?;
+            let cur_guide = data
+                .guide_url
+                .clone()
+                .unwrap_or_else(|| "не указан".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingGuide { data }))
+                .await?;
             bot.send_message(cid, format!("📖 <b>Текущий гайд / инструкция:</b>\n<code>{}</code>\n\nВведите новый текст инструкции или ссылку на Telegraph:", encode_text(&cur_guide)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("clear", EditApkState::EditingDiffUrl { mut data }) => {
             data.diff_url = None;
-            let cur_guide = data.guide_url.clone().unwrap_or_else(|| "не указан".to_string());
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingGuide { data })).await?;
+            let cur_guide = data
+                .guide_url
+                .clone()
+                .unwrap_or_else(|| "не указан".to_string());
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingGuide { data }))
+                .await?;
             bot.send_message(cid, format!("📖 <b>Текущий гайд / инструкция:</b>\n<code>{}</code>\n\nВведите новый текст инструкции или ссылку на Telegraph:", encode_text(&cur_guide)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_clear_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("skip", EditApkState::EditingGuide { data }) => {
-            let cur_tags = if data.tags.is_empty() { "нет тегов".to_string() } else { data.tags.join(", ") };
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingTags { data })).await?;
+            let cur_tags = if data.tags.is_empty() {
+                "нет тегов".to_string()
+            } else {
+                data.tags.join(", ")
+            };
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingTags { data }))
+                .await?;
             bot.send_message(cid, format!("🏷️ <b>Текущие теги:</b> <code>{}</code>\n\nВведите новые теги через пробел/запятую:", encode_text(&cur_tags)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_or_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
@@ -668,25 +828,42 @@ pub async fn handle_apk_edit_flow(
         ("clear", EditApkState::EditingGuide { mut data }) => {
             data.guide_url = None;
             data.guide_text = None;
-            let cur_tags = if data.tags.is_empty() { "нет тегов".to_string() } else { data.tags.join(", ") };
-            dialogue.update(DialogueState::EditApk(EditApkState::EditingTags { data })).await?;
+            let cur_tags = if data.tags.is_empty() {
+                "нет тегов".to_string()
+            } else {
+                data.tags.join(", ")
+            };
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::EditingTags { data }))
+                .await?;
             bot.send_message(cid, format!("🏷️ <b>Текущие теги:</b> <code>{}</code>\n\nВведите новые теги через пробел/запятую:", encode_text(&cur_tags)))
                 .reply_markup(crate::dialogue::edit_apk::edit_skip_or_cancel_keyboard())
                 .parse_mode(ParseMode::Html).await?;
         }
         ("skip", EditApkState::EditingTags { data }) => {
             let post = build_apk_post_data(
-                &data.app_name, &data.version, data.description.clone(), data.changelog.clone(),
-                data.diff_url.clone(), data.guide_url.clone(), data.cover_image_file_id.clone(),
-                data.tags.clone(), data.submitted_by_username.clone(),
+                &data.app_name,
+                &data.version,
+                data.description.clone(),
+                data.changelog.clone(),
+                data.diff_url.clone(),
+                data.guide_url.clone(),
+                data.cover_image_file_id.clone(),
+                data.tags.clone(),
+                data.submitted_by_username.clone(),
             );
             let preview_text = render_post_text(&post);
             let confirm_kb = InlineKeyboardMarkup::new(vec![vec![
-                InlineKeyboardButton::callback("🚀 Опубликовать", format!("edit_publish:{}", data.version_id)),
+                InlineKeyboardButton::callback(
+                    "🚀 Опубликовать",
+                    format!("edit_publish:{}", data.version_id),
+                ),
                 InlineKeyboardButton::callback("❌ Отмена", "edit_cancel"),
             ]]);
             let version_id = data.version_id;
-            dialogue.update(DialogueState::EditApk(EditApkState::ConfirmEdit { data })).await?;
+            dialogue
+                .update(DialogueState::EditApk(EditApkState::ConfirmEdit { data }))
+                .await?;
             bot.send_message(cid, format!("👀 <b>Предпросмотр отредактированного релиза #{}</b>:\n\n{}\n\n━━━━━━━━━━━━━━━\nОпубликовать?", version_id, preview_text))
                 .parse_mode(ParseMode::Html)
                 .reply_markup(confirm_kb)

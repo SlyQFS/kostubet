@@ -104,7 +104,9 @@ pub fn variant_selection_keyboard() -> InlineKeyboardMarkup {
     for chunk in variants.chunks(2) {
         let row = chunk
             .iter()
-            .map(|(label, v)| InlineKeyboardButton::callback(*label, format!("variant_select:{}", v)))
+            .map(|(label, v)| {
+                InlineKeyboardButton::callback(*label, format!("variant_select:{}", v))
+            })
             .collect();
         rows.push(row);
     }
@@ -136,12 +138,11 @@ pub fn done_or_cancel_keyboard() -> InlineKeyboardMarkup {
     ]])
 }
 
-
-
 pub fn cancel_keyboard() -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("❌ Отменить", "submit_confirm:cancel"),
-    ]])
+    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+        "❌ Отменить",
+        "submit_confirm:cancel",
+    )]])
 }
 
 #[tracing::instrument(skip(bot, dialogue, db))]
@@ -175,12 +176,9 @@ pub async fn handle_submit_message(
         }
         SubmitApkState::WaitingName => {
             if text.is_empty() {
-                bot.send_message(
-                    chat_id,
-                    "⚠️ Введите название (например: <i>example</i>):",
-                )
-                .reply_markup(cancel_keyboard())
-                .await?;
+                bot.send_message(chat_id, "⚠️ Введите название (например: <i>example</i>):")
+                    .reply_markup(cancel_keyboard())
+                    .await?;
                 return Ok(());
             }
 
@@ -246,18 +244,15 @@ pub async fn handle_submit_message(
             });
 
             dialogue
-                .update(DialogueState::SubmitApk(SubmitApkState::WaitingDescription {
-                    data,
-                }))
+                .update(DialogueState::SubmitApk(
+                    SubmitApkState::WaitingDescription { data },
+                ))
                 .await?;
 
-            bot.send_message(
-                chat_id,
-                "📝 Введите описание (например: <i>example</i>):",
-            )
-            .reply_markup(skip_or_cancel_keyboard())
-            .parse_mode(ParseMode::Html)
-            .await?;
+            bot.send_message(chat_id, "📝 Введите описание (например: <i>example</i>):")
+                .reply_markup(skip_or_cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
         }
         SubmitApkState::WaitingDescription { mut data } => {
             if text != "/skip" && !text.is_empty() {
@@ -280,13 +275,10 @@ pub async fn handle_submit_message(
                 }))
                 .await?;
 
-            bot.send_message(
-                chat_id,
-                "📦 Введите версию (например: <code>1.0.0</code>):",
-            )
-            .reply_markup(cancel_keyboard())
-            .parse_mode(ParseMode::Html)
-            .await?;
+            bot.send_message(chat_id, "📦 Введите версию (например: <code>1.0.0</code>):")
+                .reply_markup(cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
         }
         SubmitApkState::WaitingVersion { mut data } => {
             if text.is_empty() {
@@ -304,13 +296,10 @@ pub async fn handle_submit_message(
                 }))
                 .await?;
 
-            bot.send_message(
-                chat_id,
-                "📌 Введите заголовок (например: <i>example</i>):",
-            )
-            .reply_markup(skip_or_cancel_keyboard())
-            .parse_mode(ParseMode::Html)
-            .await?;
+            bot.send_message(chat_id, "📌 Введите заголовок (например: <i>example</i>):")
+                .reply_markup(skip_or_cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
         }
         SubmitApkState::WaitingTitle { mut data } => {
             if text != "/skip" && !text.is_empty() {
@@ -386,12 +375,16 @@ pub async fn handle_submit_message(
                     data.guide_url = Some(text.to_string());
                 } else {
                     data.guide_text = Some(text.to_string());
-                    let _ = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await;
+                    let _ = bot
+                        .send_chat_action(chat_id, teloxide::types::ChatAction::Typing)
+                        .await;
                     if let Ok(url) = crate::services::telegraph::publish_text_guide(
                         &data.name,
                         data.submitted_by_username.as_deref(),
                         text,
-                    ).await {
+                    )
+                    .await
+                    {
                         data.guide_url = Some(url);
                     }
                 }
@@ -465,7 +458,10 @@ pub async fn handle_submit_message(
                 };
                 bot.send_message(
                     chat_id,
-                    format!("⚠️ Отправьте фото/скриншот или нажмите <b>{}</b>:", action_word),
+                    format!(
+                        "⚠️ Отправьте фото/скриншот или нажмите <b>{}</b>:",
+                        action_word
+                    ),
                 )
                 .reply_markup(kb)
                 .parse_mode(ParseMode::Html)
@@ -665,6 +661,8 @@ pub async fn process_cover_and_advance(
     dialogue: &BotDialogue,
     mut data: Box<SubmitApkData>,
 ) -> Result<()> {
+    let next_step_prompt = "📦 Отправьте файлы (<b>.apk, .zip, .7z</b>) документом.\nПо завершении отправьте <code>/done</code>:";
+
     if data.raw_cover_file_ids.len() > 1 {
         let _ = bot
             .send_chat_action(chat_id, teloxide::types::ChatAction::UploadPhoto)
@@ -681,12 +679,19 @@ pub async fn process_cover_and_advance(
             }
         }
 
+        let mut sent_photo_msg = false;
         if let Ok(collage_jpeg) = crate::services::collage::create_collage(&raw_bytes) {
             let input_file =
                 teloxide::types::InputFile::memory(collage_jpeg).file_name("collage.jpg");
+            let caption = format!(
+                "📸 <b>Постер успешно сформирован!</b>\n\n{}",
+                next_step_prompt
+            );
             if let Ok(sent_photo) = bot
                 .send_photo(chat_id, input_file)
-                .caption("📸 Сгенерирован постер из скриншотов:")
+                .caption(caption)
+                .parse_mode(ParseMode::Html)
+                .reply_markup(cancel_keyboard())
                 .await
             {
                 if let Some(photos) = sent_photo.photo() {
@@ -694,38 +699,48 @@ pub async fn process_cover_and_advance(
                         data.cover_image_file_id = Some(largest.file.id.clone());
                     }
                 }
+                sent_photo_msg = true;
             }
         } else {
             data.cover_image_file_id = data.raw_cover_file_ids.first().cloned();
         }
-    } else if data.raw_cover_file_ids.len() == 1 {
-        data.cover_image_file_id = Some(data.raw_cover_file_ids[0].clone());
+
+        dialogue
+            .update(DialogueState::SubmitApk(SubmitApkState::WaitingApkFiles {
+                data,
+            }))
+            .await?;
+
+        if !sent_photo_msg {
+            bot.send_message(chat_id, next_step_prompt)
+                .reply_markup(cancel_keyboard())
+                .parse_mode(ParseMode::Html)
+                .await?;
+        }
+    } else {
+        if data.raw_cover_file_ids.len() == 1 {
+            data.cover_image_file_id = Some(data.raw_cover_file_ids[0].clone());
+        }
+
+        dialogue
+            .update(DialogueState::SubmitApk(SubmitApkState::WaitingApkFiles {
+                data,
+            }))
+            .await?;
+
+        bot.send_message(chat_id, next_step_prompt)
+            .reply_markup(cancel_keyboard())
+            .parse_mode(ParseMode::Html)
+            .await?;
     }
-
-    dialogue
-        .update(DialogueState::SubmitApk(SubmitApkState::WaitingApkFiles {
-            data,
-        }))
-        .await?;
-
-    bot.send_message(
-        chat_id,
-        "📦 Отправьте файлы (<b>.apk, .zip, .7z</b>) документом.\nПо завершении отправьте <code>/done</code>:",
-    )
-    .reply_markup(cancel_keyboard())
-    .parse_mode(ParseMode::Html)
-    .await?;
 
     Ok(())
 }
 
-pub async fn send_confirm_card(
-    bot: &Bot,
-    chat_id: ChatId,
-    data: &SubmitApkData,
-) -> Result<()> {
+pub async fn send_confirm_card(bot: &Bot, chat_id: ChatId, data: &SubmitApkData) -> Result<()> {
     let post = PostData {
         title: format!("{} v{}", data.name, data.version),
+        repo_url: None,
         description: data.description.clone(),
         body: data.changelog.clone(),
         diff_url: data.diff_url.clone(),
@@ -742,16 +757,27 @@ pub async fn send_confirm_card(
         InlineKeyboardButton::callback("❌ Отменить", "submit_confirm:cancel"),
     ]]);
 
-    bot.send_message(
-        chat_id,
-        format!(
-            "👀 <b>Предпросмотр:</b>\n\n{}\n\nВсё верно?",
-            preview_text
-        ),
-    )
-    .parse_mode(ParseMode::Html)
-    .reply_markup(confirm_kb)
-    .await?;
+    let full_text = format!("👀 <b>Предпросмотр:</b>\n\n{}\n\nВсё верно?", preview_text);
+
+    if let Some(ref fid) = data.cover_image_file_id {
+        if full_text.chars().count() <= 1024 {
+            let res = bot
+                .send_photo(chat_id, teloxide::types::InputFile::file_id(fid.clone()))
+                .caption(full_text.clone())
+                .parse_mode(ParseMode::Html)
+                .reply_markup(confirm_kb.clone())
+                .await;
+
+            if res.is_ok() {
+                return Ok(());
+            }
+        }
+    }
+
+    bot.send_message(chat_id, full_text)
+        .parse_mode(ParseMode::Html)
+        .reply_markup(confirm_kb)
+        .await?;
 
     Ok(())
 }

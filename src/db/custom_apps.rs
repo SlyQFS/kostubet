@@ -45,6 +45,11 @@ pub struct CustomAppVersionRecord {
     pub reviewed_at: Option<String>,
     #[allow(dead_code)]
     pub published_message_id: Option<i64>,
+    /// Comma-separated ids of all messages posted for this version
+    /// (card, changelog, APK documents) — used to clean up old posts.
+    /// Read via SQL aggregates in repo methods, not from this struct.
+    #[allow(dead_code)]
+    pub published_message_ids: Option<String>,
     pub created_at: String,
 }
 
@@ -320,7 +325,7 @@ impl<'a> CustomAppsRepo<'a> {
             r#"
             SELECT id, app_id, version, title, changelog, diff_url,
                    cover_image_file_id, guide_url, guide_text, submitted_by, submitted_by_username, status, reviewed_by,
-                   reviewed_at, published_message_id, created_at
+                   reviewed_at, published_message_id, published_message_ids, created_at
             FROM custom_app_versions
             WHERE id = ?
             "#,
@@ -346,6 +351,7 @@ impl<'a> CustomAppsRepo<'a> {
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
             published_message_id: r.get("published_message_id"),
+            published_message_ids: r.try_get("published_message_ids").unwrap_or(None),
             created_at: r.get("created_at"),
         }))
     }
@@ -355,7 +361,7 @@ impl<'a> CustomAppsRepo<'a> {
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
                    v.cover_image_file_id, v.guide_url, v.guide_text, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
-                   v.reviewed_at, v.published_message_id, v.created_at
+                   v.reviewed_at, v.published_message_id, v.published_message_ids, v.created_at
             FROM custom_app_versions v
             JOIN custom_apps a ON a.current_version_id = v.id
             WHERE a.id = ?
@@ -382,6 +388,7 @@ impl<'a> CustomAppsRepo<'a> {
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
             published_message_id: r.get("published_message_id"),
+            published_message_ids: r.try_get("published_message_ids").unwrap_or(None),
             created_at: r.get("created_at"),
         }))
     }
@@ -397,7 +404,7 @@ impl<'a> CustomAppsRepo<'a> {
             r#"
             SELECT id, app_id, version, title, changelog, diff_url,
                    cover_image_file_id, guide_url, guide_text, submitted_by, submitted_by_username, status, reviewed_by,
-                   reviewed_at, published_message_id, created_at
+                   reviewed_at, published_message_id, published_message_ids, created_at
             FROM custom_app_versions
             WHERE app_id = ?
             ORDER BY created_at DESC
@@ -425,6 +432,7 @@ impl<'a> CustomAppsRepo<'a> {
             reviewed_by: r.get("reviewed_by"),
             reviewed_at: r.get("reviewed_at"),
             published_message_id: r.get("published_message_id"),
+            published_message_ids: r.try_get("published_message_ids").unwrap_or(None),
             created_at: r.get("created_at"),
         }))
     }
@@ -464,7 +472,7 @@ impl<'a> CustomAppsRepo<'a> {
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
                    v.cover_image_file_id, v.guide_url, v.guide_text, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
-                   v.reviewed_at, v.published_message_id, v.created_at,
+                   v.reviewed_at, v.published_message_id, v.published_message_ids, v.created_at,
                    a.slug, a.name, a.description, a.guide_url as app_guide_url, a.guide_text as app_guide_text, a.current_version_id, a.created_by, a.created_at as app_created_at
             FROM custom_app_versions v
             JOIN custom_apps a ON v.app_id = a.id
@@ -495,6 +503,7 @@ impl<'a> CustomAppsRepo<'a> {
                     reviewed_by: r.get("reviewed_by"),
                     reviewed_at: r.get("reviewed_at"),
                     published_message_id: r.get("published_message_id"),
+                    published_message_ids: r.try_get("published_message_ids").unwrap_or(None),
                     created_at: r.get("created_at"),
                 };
                 let app = CustomAppRecord {
@@ -533,7 +542,7 @@ impl<'a> CustomAppsRepo<'a> {
             r#"
             SELECT v.id, v.app_id, v.version, v.title, v.changelog, v.diff_url,
                    v.cover_image_file_id, v.guide_url, v.guide_text, v.submitted_by, v.submitted_by_username, v.status, v.reviewed_by,
-                   v.reviewed_at, v.published_message_id, v.created_at,
+                   v.reviewed_at, v.published_message_id, v.published_message_ids, v.created_at,
                    a.slug, a.name, a.description, a.guide_url as app_guide_url, a.guide_text as app_guide_text, a.current_version_id, a.created_by, a.created_at as app_created_at
             FROM custom_app_versions v
             JOIN custom_apps a ON v.app_id = a.id
@@ -566,6 +575,7 @@ impl<'a> CustomAppsRepo<'a> {
                     reviewed_by: r.get("reviewed_by"),
                     reviewed_at: r.get("reviewed_at"),
                     published_message_id: r.get("published_message_id"),
+                    published_message_ids: r.try_get("published_message_ids").unwrap_or(None),
                     created_at: r.get("created_at"),
                 };
                 let app = CustomAppRecord {
@@ -619,6 +629,62 @@ impl<'a> CustomAppsRepo<'a> {
         Ok(())
     }
 
+    /// Stores all Telegram message ids posted for this version
+    /// (card, changelog, APK documents) as a comma-separated string.
+    pub async fn set_published_message_ids(
+        &self,
+        version_id: i64,
+        message_ids: &[i32],
+    ) -> Result<()> {
+        let joined = message_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        sqlx::query("UPDATE custom_app_versions SET published_message_ids = ? WHERE id = ?")
+            .bind(if joined.is_empty() {
+                None
+            } else {
+                Some(joined)
+            })
+            .bind(version_id)
+            .execute(self.pool)
+            .await
+            .context("Failed to set published_message_ids")?;
+        Ok(())
+    }
+
+    /// All Telegram message ids posted for a single version, merging the
+    /// legacy single `published_message_id` with the multi-id column.
+    pub async fn get_published_message_ids_for_version(&self, version_id: i64) -> Result<Vec<i64>> {
+        let row = sqlx::query(
+            "SELECT published_message_id, published_message_ids FROM custom_app_versions WHERE id = ?",
+        )
+        .bind(version_id)
+        .fetch_optional(self.pool)
+        .await
+        .context("Failed to fetch published message ids for version")?;
+
+        let Some(row) = row else {
+            return Ok(Vec::new());
+        };
+
+        let mut ids: Vec<i64> = Vec::new();
+        if let Some(single) = row.try_get::<Option<i64>, _>("published_message_id")? {
+            ids.push(single);
+        }
+        if let Some(list) = row.try_get::<Option<String>, _>("published_message_ids")? {
+            for part in list.split(',') {
+                if let Ok(id) = part.trim().parse::<i64>() {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+            }
+        }
+        Ok(ids)
+    }
+
     /// Rolls an approved version back to `pending` (used when publishing fails
     /// after a successful moderation claim, so the request returns to the queue).
     pub async fn reset_version_to_pending(&self, version_id: i64) -> Result<()> {
@@ -653,19 +719,38 @@ impl<'a> CustomAppsRepo<'a> {
         Ok(())
     }
 
-    /// All published Telegram message ids across the app's versions
+    /// All published Telegram message ids across the app's versions, merging
+    /// the legacy single `published_message_id` with the multi-id column
     /// (used to remove channel posts when deleting an app).
     pub async fn get_published_message_ids_for_app(&self, app_id: i64) -> Result<Vec<i64>> {
-        let ids: Vec<i64> = sqlx::query_scalar(
+        let mut ids: Vec<i64> = Vec::new();
+        let rows = sqlx::query(
             r#"
-            SELECT published_message_id FROM custom_app_versions
-            WHERE app_id = ? AND published_message_id IS NOT NULL
+            SELECT published_message_id, published_message_ids FROM custom_app_versions
+            WHERE app_id = ?
             "#,
         )
         .bind(app_id)
         .fetch_all(self.pool)
         .await
         .context("Failed to list published message ids for app")?;
+
+        for row in rows {
+            if let Some(single) = row.try_get::<Option<i64>, _>("published_message_id")? {
+                if !ids.contains(&single) {
+                    ids.push(single);
+                }
+            }
+            if let Some(list) = row.try_get::<Option<String>, _>("published_message_ids")? {
+                for part in list.split(',') {
+                    if let Ok(id) = part.trim().parse::<i64>() {
+                        if !ids.contains(&id) {
+                            ids.push(id);
+                        }
+                    }
+                }
+            }
+        }
         Ok(ids)
     }
 

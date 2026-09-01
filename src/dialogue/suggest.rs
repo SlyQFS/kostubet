@@ -47,7 +47,12 @@ pub async fn validate_new_suggestion(
         }
     }
 
-    if db.tools().get_tool(&repo.owner, &repo.name).await?.is_some() {
+    if db
+        .tools()
+        .get_tool(&repo.owner, &repo.name)
+        .await?
+        .is_some()
+    {
         bot.send_message(
             chat_id,
             format!(
@@ -104,16 +109,13 @@ pub fn skip_or_cancel_keyboard() -> InlineKeyboardMarkup {
 }
 
 pub fn cancel_keyboard() -> InlineKeyboardMarkup {
-    InlineKeyboardMarkup::new(vec![vec![
-        InlineKeyboardButton::callback("❌ Отменить", "sugg_cancel"),
-    ]])
+    InlineKeyboardMarkup::new(vec![vec![InlineKeyboardButton::callback(
+        "❌ Отменить",
+        "sugg_cancel",
+    )]])
 }
 
-pub async fn send_suggest_confirm(
-    bot: &Bot,
-    chat_id: ChatId,
-    data: &SuggestData,
-) -> Result<()> {
+pub async fn send_suggest_confirm(bot: &Bot, chat_id: ChatId, data: &SuggestData) -> Result<()> {
     let tags_str = if data.tags.is_empty() {
         "нет".to_string()
     } else {
@@ -170,7 +172,8 @@ pub async fn handle_suggest_message(
     if text == "/cancel" || text == "/start" {
         dialogue.exit().await?;
         if text == "/cancel" {
-            bot.send_message(chat_id, "❌ Предложение отменено.").await?;
+            bot.send_message(chat_id, "❌ Предложение отменено.")
+                .await?;
         }
         return Ok(());
     }
@@ -188,7 +191,15 @@ pub async fn handle_suggest_message(
                 return Ok(());
             };
 
-            if !validate_new_suggestion(&bot, chat_id, msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0), &repo, &db).await? {
+            if !validate_new_suggestion(
+                &bot,
+                chat_id,
+                msg.from.as_ref().map(|u| u.id.0 as i64).unwrap_or(0),
+                &repo,
+                &db,
+            )
+            .await?
+            {
                 dialogue.exit().await?;
                 return Ok(());
             }
@@ -253,12 +264,16 @@ pub async fn handle_suggest_message(
                     data.guide_url = Some(text.clone());
                 } else {
                     data.guide_text = Some(text.clone());
-                    let _ = bot.send_chat_action(chat_id, teloxide::types::ChatAction::Typing).await;
+                    let _ = bot
+                        .send_chat_action(chat_id, teloxide::types::ChatAction::Typing)
+                        .await;
                     if let Ok(url) = crate::services::telegraph::publish_text_guide(
                         &format!("{}/{}", data.owner, data.name),
                         None,
                         &text,
-                    ).await {
+                    )
+                    .await
+                    {
                         data.guide_url = Some(url);
                     }
                 }

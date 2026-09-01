@@ -178,7 +178,9 @@ pub async fn handle_suggest_flow(
         ("desc", SuggestState::Confirm { data }) => {
             let cur_desc = data.description.clone().unwrap_or_default();
             dialogue
-                .update(DialogueState::Suggest(SuggestState::WaitingDescription { data }))
+                .update(DialogueState::Suggest(SuggestState::WaitingDescription {
+                    data,
+                }))
                 .await?;
             if let Some(msg) = &q.message {
                 let _ = bot

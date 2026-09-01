@@ -208,7 +208,10 @@ impl<'a> ToolsRepo<'a> {
         .await
         .context("Failed to list tracked tools")?;
 
-        Ok(rows.into_iter().map(|r| TrackedToolRecord::from_row(&r)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| TrackedToolRecord::from_row(&r))
+            .collect())
     }
 
     pub async fn update_last_release_and_etag(
@@ -300,6 +303,9 @@ impl<'a> ToolsRepo<'a> {
         .await
         .context("Failed to list failing tools")?;
 
-        Ok(rows.into_iter().map(|r| TrackedToolRecord::from_row(&r)).collect())
+        Ok(rows
+            .into_iter()
+            .map(|r| TrackedToolRecord::from_row(&r))
+            .collect())
     }
 }
